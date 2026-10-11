@@ -74,8 +74,9 @@ func TestSubmitFSResult(t *testing.T) {
 		t.Fatalf("SubmitFSResult failed: %v", err)
 	}
 
-	if atomic.LoadInt32(&batchCalls) != 3 {
-		t.Errorf("expected 3 batches for 1200 records, got %d", atomic.LoadInt32(&batchCalls))
+	expectedBatches := int32((len(obs) + BatchSize - 1) / BatchSize)
+	if atomic.LoadInt32(&batchCalls) != expectedBatches {
+		t.Errorf("expected %d batches for 1200 records, got %d", expectedBatches, atomic.LoadInt32(&batchCalls))
 	}
 	if atomic.LoadInt32(&completeCalls) != 1 {
 		t.Errorf("expected 1 complete call, got %d", atomic.LoadInt32(&completeCalls))

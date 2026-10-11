@@ -1,6 +1,6 @@
-import React, { useState } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useInfiniteQuery } from '@tanstack/react-query'
 import { api } from '../api'
 import {
   TLSEndpointGroupItem,
@@ -85,14 +85,46 @@ export const TLSReportPage: React.FC = () => {
   })
   const endpointGroups = groupedData?.items || []
 
-  // 4. Fetch Flat observations (polls every 1s when running)
-  const { data: flatData } = useQuery({
-    queryKey: ['tls-flat', runId],
-    queryFn: () => api.getTLSObservationsNone(runId, { limit: 200 }),
+  // 4. Fetch Flat observations dynamically (polls every 1s when running)
+  const {
+    data: flatInfiniteData,
+    fetchNextPage: fetchNextObservations,
+    hasNextPage: hasNextObservations,
+    isFetchingNextPage: isFetchingNextObservations,
+  } = useInfiniteQuery({
+    queryKey: ['tls-flat-infinite', runId],
+    queryFn: ({ pageParam = 0 }) =>
+      api.getTLSObservationsNone(runId, { limit: 50, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loadedCount = allPages.reduce((acc, p) => acc + (p.items?.length || 0), 0)
+      return loadedCount < (lastPage?.total || 0) ? loadedCount : undefined
+    },
     enabled: !!runId,
     refetchInterval: isRunning ? 1000 : false,
   })
-  const flatObservations = flatData?.items || []
+
+  const flatObservations = React.useMemo(() => {
+    return flatInfiniteData?.pages.flatMap((p) => p.items || []) || []
+  }, [flatInfiniteData])
+
+  const totalObservations = flatInfiniteData?.pages[0]?.total || flatObservations.length
+
+  const tlsSentinelRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!tlsSentinelRef.current || !hasNextObservations || isFetchingNextObservations) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasNextObservations && !isFetchingNextObservations) {
+          fetchNextObservations()
+        }
+      },
+      { threshold: 0.1, rootMargin: '250px' }
+    )
+    observer.observe(tlsSentinelRef.current)
+    return () => observer.disconnect()
+  }, [hasNextObservations, isFetchingNextObservations, fetchNextObservations])
 
   // 5. Fetch Evidence (polls every 1s when running)
   const { data: evidence } = useQuery({
@@ -623,6 +655,48 @@ export const TLSReportPage: React.FC = () => {
                     })}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Dynamic scroll sentinel */}
+              <div ref={tlsSentinelRef} className="h-2 w-full" />
+
+              {/* Dynamic footer for TLS observations */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-slate-800 bg-slate-950/60 text-xs text-slate-400">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-slate-300">
+                    Loaded {flatObservations.length} of {totalObservations} live flow observations
+                  </span>
+                  {hasNextObservations && (
+                    <span className="text-[11px] text-cyan-400 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/50">
+                      Dynamically loading on scroll
+                    </span>
+                  )}
+                  {!hasNextObservations && totalObservations > 0 && (
+                    <span className="text-[11px] text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/50">
+                      All observations loaded
+                    </span>
+                  )}
+                </div>
+
+                {hasNextObservations && (
+                  <button
+                    onClick={() => fetchNextObservations()}
+                    disabled={isFetchingNextObservations}
+                    className="px-3 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-300 font-medium transition disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {isFetchingNextObservations ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                        Loading more...
+                      </>
+                    ) : (
+                      <>
+                        <span>Load More Flows (+50)</span>
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           </>

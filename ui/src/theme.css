@@ -52,3 +52,86 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #475569;
 }
+
+/* React Flow Dark Theme Overrides */
+.react-flow__node-default,
+.react-flow__node-input,
+.react-flow__node-output,
+.react-flow__node-group {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  color: inherit !important;
+}
+
+.react-flow__node.selected,
+.react-flow__node:focus,
+.react-flow__node:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+.react-flow__node-default.selected,
+.react-flow__node-default:focus {
+  box-shadow: none !important;
+  border: none !important;
+}
+
+.react-flow__handle {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* High-contrast zoom & navigation controls */
+.react-flow__controls {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7) !important;
+  border: 1px solid #334155 !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  background: #0f172a !important;
+}
+
+.react-flow__controls-button {
+  background: #0f172a !important;
+  border: none !important;
+  border-bottom: 1px solid #1e293b !important;
+  color: #38bdf8 !important;
+  fill: #38bdf8 !important;
+  transition: all 0.15s ease-in-out !important;
+  width: 28px !important;
+  height: 28px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom: none !important;
+}
+
+.react-flow__controls-button:hover {
+  background: #1e293b !important;
+}
+
+.react-flow__controls-button svg {
+  fill: #38bdf8 !important;
+  stroke: #38bdf8 !important;
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.react-flow__controls-button:hover svg {
+  fill: #22d3ee !important;
+  stroke: #22d3ee !important;
+}
+
+.react-flow__edge-textbg {
+  fill: #0f172a !important;
+  fill-opacity: 0.9 !important;
+}
+
+.react-flow__edge-text {
+  fill: #94a3b8 !important;
+}

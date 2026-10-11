@@ -56,6 +56,10 @@ type AFPacketSniffer struct {
 	loIndex    int
 }
 
+func htons(v uint16) int {
+	return int((v<<8)&0xff00 | (v>>8)&0x00ff)
+}
+
 func NewAFPacketSniffer() *AFPacketSniffer {
 	localAddrs := make(map[string]bool)
 	loIdx := 0
@@ -84,6 +88,11 @@ func NewAFPacketSniffer() *AFPacketSniffer {
 			}
 		}
 	}
+	if loIdx == 0 {
+		if iface, err := net.InterfaceByName("lo"); err == nil {
+			loIdx = iface.Index
+		}
+	}
 
 	return &AFPacketSniffer{
 		localAddrs: localAddrs,
@@ -109,21 +118,23 @@ func makeFlowKey(sip, dip string, sport, dport uint16, proto uint8) flowKey {
 }
 
 type flowEntry struct {
-	key       flowKey
-	firstTS   time.Time
-	lastTS    time.Time
-	clientIP  string
-	clientPort int
-	serverIP  string
-	serverPort int
-	state     *TLSConnectionState
-	clientReasm *FlowReassembler
-	serverReasm *FlowReassembler
+	key                flowKey
+	firstTS            time.Time
+	lastTS             time.Time
+	clientIP           string
+	clientPort         int
+	serverIP           string
+	serverPort         int
+	state              *TLSConnectionState
+	clientReasm        *FlowReassembler
+	serverReasm        *FlowReassembler
+	lastEmittedRecords int
+	lastEmittedOutcome string
 }
 
 func (s *AFPacketSniffer) Run(ctx context.Context, emit func(*TLSObservation)) error {
-	// Create AF_PACKET raw socket
-	htonsAll := int(binary.BigEndian.Uint16([]byte{byte(unix.ETH_P_ALL >> 8), byte(unix.ETH_P_ALL)}))
+	// Create AF_PACKET raw socket with correct network byte order protocol
+	htonsAll := htons(unix.ETH_P_ALL)
 	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW, htonsAll)
 	if err != nil {
 		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
@@ -143,8 +154,8 @@ func (s *AFPacketSniffer) Run(ctx context.Context, emit func(*TLSObservation)) e
 
 	buf := make([]byte, 65536)
 
-	// Ticker for cleaning expired flows
-	ticker := time.NewTicker(2 * time.Second)
+	// Ticker for periodic live flow emission and eviction
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -153,25 +164,42 @@ func (s *AFPacketSniffer) Run(ctx context.Context, emit func(*TLSObservation)) e
 			// Scan ended: flush active flows to emit
 			flowsMu.Lock()
 			for _, flow := range flows {
-				obs := s.buildObservation(flow)
-				if obs != nil {
-					emit(obs)
+				if flow.state.RecordCount > 0 && (flow.state.RecordCount != flow.lastEmittedRecords || flow.state.Outcome != flow.lastEmittedOutcome) {
+					obs := s.buildObservation(flow)
+					if obs != nil {
+						flow.lastEmittedRecords = flow.state.RecordCount
+						flow.lastEmittedOutcome = flow.state.Outcome
+						emit(obs)
+					}
 				}
 			}
 			flowsMu.Unlock()
 			return nil
 
 		case <-ticker.C:
-			// Flow table TTL eviction (60 s)
 			flowsMu.Lock()
 			now := time.Now()
 			for k, flow := range flows {
+				// Evict expired flows (> 60s inactivity)
 				if now.Sub(flow.lastTS) > 60*time.Second {
-					obs := s.buildObservation(flow)
-					if obs != nil {
-						emit(obs)
+					if flow.state.RecordCount > 0 && (flow.state.RecordCount != flow.lastEmittedRecords || flow.state.Outcome != flow.lastEmittedOutcome) {
+						obs := s.buildObservation(flow)
+						if obs != nil {
+							emit(obs)
+						}
 					}
 					delete(flows, k)
+					continue
+				}
+
+				// Emit active flow if new TLS records were seen or outcome updated
+				if flow.state.RecordCount > 0 && (flow.state.RecordCount != flow.lastEmittedRecords || flow.state.Outcome != flow.lastEmittedOutcome) {
+					obs := s.buildObservation(flow)
+					if obs != nil {
+						flow.lastEmittedRecords = flow.state.RecordCount
+						flow.lastEmittedOutcome = flow.state.Outcome
+						emit(obs)
+					}
 				}
 			}
 			flowsMu.Unlock()
@@ -196,7 +224,7 @@ func (s *AFPacketSniffer) Run(ctx context.Context, emit func(*TLSObservation)) e
 
 			// Filter loopback: skip PACKET_OUTGOING on loopback "lo"
 			if ll, ok := from.(*unix.SockaddrLinklayer); ok {
-				if int(ll.Ifindex) == s.loIndex && ll.Pkttype == unix.PACKET_OUTGOING {
+				if s.loIndex > 0 && int(ll.Ifindex) == s.loIndex && ll.Pkttype == unix.PACKET_OUTGOING {
 					// Loopback frame arriving outgoing: skip so loopback frames aren't doubled
 					continue
 				}
@@ -301,6 +329,16 @@ func (s *AFPacketSniffer) handleFrame(frame []byte, now time.Time, flows map[flo
 
 	// Detect if TCP segment carries TLS data
 	if len(tcpPayload) > 0 {
+		// ClientHello packet: sip:srcPort is definitely the client
+		if len(tcpPayload) >= 6 && tcpPayload[0] == 22 && tcpPayload[5] == 1 {
+			if flow.clientIP != sip || flow.clientPort != int(srcPort) {
+				flow.clientIP, flow.serverIP = sip, dip
+				flow.clientPort, flow.serverPort = int(srcPort), int(dstPort)
+				flow.clientReasm.Reset()
+				flow.serverReasm.Reset()
+			}
+		}
+
 		// Feed according to direction
 		if sip == flow.clientIP && int(srcPort) == flow.clientPort {
 			flow.clientReasm.Append(tcpPayload)
@@ -308,15 +346,6 @@ func (s *AFPacketSniffer) handleFrame(frame []byte, now time.Time, flows map[flo
 		} else {
 			flow.serverReasm.Append(tcpPayload)
 			flow.state.FeedBytes(flow.serverReasm)
-		}
-
-		// If ClientHello seen, ensure client is the ClientHello sender
-		if flow.state.sawClientHello && (sip != flow.clientIP || int(srcPort) != flow.clientPort) {
-			// Invert client/server roles if needed
-			if flow.state.RecordCount == 1 {
-				flow.clientIP, flow.serverIP = sip, dip
-				flow.clientPort, flow.serverPort = int(srcPort), int(dstPort)
-			}
 		}
 	}
 

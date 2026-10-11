@@ -1,6 +1,6 @@
-import React, { useState } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useInfiniteQuery } from '@tanstack/react-query'
 import { api } from '../api'
 import { FSCertificateItem } from '../types'
 import { AsyncState } from '../components/AsyncState'
@@ -20,6 +20,7 @@ import {
   FolderLock,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
   X,
   Layers,
   FileCheck,
@@ -48,8 +49,6 @@ export const FSReportPage: React.FC = () => {
   const [filterAlgo, setFilterAlgo] = useState('')
   const [filterFormat, setFilterFormat] = useState('')
   const [filterParseStatus, setFilterParseStatus] = useState('')
-  const [page, setPage] = useState(0)
-  const pageSize = 20
 
   // Selected cert drawer
   const [selectedCert, setSelectedCert] = useState<FSCertificateItem | null>(null)
@@ -83,10 +82,17 @@ export const FSReportPage: React.FC = () => {
     refetchInterval: isRunning ? 1000 : false,
   })
 
-  // 4. Fetch Certs list (polls every 1s when running)
-  const { data: certsData, isLoading: isCertsLoading, refetch: refetchCerts } = useQuery({
-    queryKey: ['fs-certs', runId, search, filterStatus, filterIssuer, filterAlgo, filterFormat, filterParseStatus, page],
-    queryFn: () =>
+  // Infinite query for dynamic loading of certificates
+  const {
+    data: certsInfiniteData,
+    isLoading: isCertsLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    refetch: refetchCerts,
+  } = useInfiniteQuery({
+    queryKey: ['fs-certs-infinite', runId, search, filterStatus, filterIssuer, filterAlgo, filterFormat, filterParseStatus],
+    queryFn: ({ pageParam = 0 }) =>
       api.getFSCertificates(runId, {
         q: search || undefined,
         status: filterStatus || undefined,
@@ -94,16 +100,40 @@ export const FSReportPage: React.FC = () => {
         algo: filterAlgo || undefined,
         format: filterFormat || undefined,
         parse_status: filterParseStatus || undefined,
-        limit: pageSize,
-        offset: page * pageSize,
+        limit: 50,
+        offset: pageParam,
       }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loadedCount = allPages.reduce((acc, p) => acc + (p.items?.length || 0), 0)
+      return loadedCount < (lastPage?.total || 0) ? loadedCount : undefined
+    },
     enabled: !!runId,
     refetchInterval: isRunning ? 1000 : false,
   })
 
-  const certs = certsData?.items || []
-  const totalCerts = certsData?.total || 0
-  const totalPages = Math.ceil(totalCerts / pageSize)
+  const certs = React.useMemo(() => {
+    return certsInfiniteData?.pages.flatMap((p) => p.items || []) || []
+  }, [certsInfiniteData])
+
+  const totalCerts = certsInfiniteData?.pages[0]?.total || 0
+
+  // Sentinel ref for dynamic infinite scroll
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!sentinelRef.current || !hasNextPage || isFetchingNextPage) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage()
+        }
+      },
+      { threshold: 0.1, rootMargin: '250px' }
+    )
+    observer.observe(sentinelRef.current)
+    return () => observer.disconnect()
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
@@ -286,7 +316,6 @@ export const FSReportPage: React.FC = () => {
                     value={search}
                     onChange={(e) => {
                       setSearch(e.target.value)
-                      setPage(0)
                     }}
                     placeholder="Search by subject, issuer, SAN or path..."
                     className="w-full bg-slate-950/80 border border-slate-700/80 rounded-lg pl-9 pr-4 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
@@ -298,7 +327,6 @@ export const FSReportPage: React.FC = () => {
                     value={filterStatus}
                     onChange={(e) => {
                       setFilterStatus(e.target.value)
-                      setPage(0)
                     }}
                     className="bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
                   >
@@ -314,7 +342,6 @@ export const FSReportPage: React.FC = () => {
                     value={filterAlgo}
                     onChange={(e) => {
                       setFilterAlgo(e.target.value)
-                      setPage(0)
                     }}
                     className="bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
                   >
@@ -330,7 +357,6 @@ export const FSReportPage: React.FC = () => {
                     value={filterFormat}
                     onChange={(e) => {
                       setFilterFormat(e.target.value)
-                      setPage(0)
                     }}
                     className="bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
                   >
@@ -346,7 +372,6 @@ export const FSReportPage: React.FC = () => {
                     value={filterParseStatus}
                     onChange={(e) => {
                       setFilterParseStatus(e.target.value)
-                      setPage(0)
                     }}
                     className="bg-slate-950/80 border border-slate-700/80 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
                   >
@@ -472,29 +497,47 @@ export const FSReportPage: React.FC = () => {
                 </table>
               </div>
 
-              {/* Pagination controls */}
-              <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800 bg-slate-950/60 text-xs text-slate-400">
-                <div>
-                  Showing {page * pageSize + 1} - {Math.min((page + 1) * pageSize, totalCerts)} of {totalCerts} findings
-                </div>
+              {/* Dynamic scroll sentinel */}
+              <div ref={sentinelRef} className="h-2 w-full" />
+
+              {/* Dynamic loading footer */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-slate-800 bg-slate-950/60 text-xs text-slate-400">
                 <div className="flex items-center gap-2">
-                  <button
-                    disabled={page === 0}
-                    onClick={() => setPage(page - 1)}
-                    className="p-1 rounded bg-slate-900 border border-slate-800 text-slate-300 disabled:opacity-40"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <span>
-                    Page {page + 1} of {totalPages || 1}
+                  <span className="font-medium text-slate-300">
+                    Showing {certs.length} of {totalCerts} findings
                   </span>
-                  <button
-                    disabled={page + 1 >= totalPages}
-                    onClick={() => setPage(page + 1)}
-                    className="p-1 rounded bg-slate-900 border border-slate-800 text-slate-300 disabled:opacity-40"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
+                  {certs.length < totalCerts && (
+                    <span className="text-[11px] text-cyan-400 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/50">
+                      Dynamically loading on scroll
+                    </span>
+                  )}
+                  {certs.length >= totalCerts && totalCerts > 0 && (
+                    <span className="text-[11px] text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/50">
+                      All {totalCerts} items loaded
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {hasNextPage && (
+                    <button
+                      onClick={() => fetchNextPage()}
+                      disabled={isFetchingNextPage}
+                      className="px-3 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-300 font-medium transition disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {isFetchingNextPage ? (
+                        <>
+                          <span className="w-3.5 h-3.5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                          Loading more...
+                        </>
+                      ) : (
+                        <>
+                          <span>Load More (+50)</span>
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

@@ -1,6 +1,10 @@
-.PHONY: all agent server run-server probe size seed clean test ui ui-dev
+.PHONY: all agent server run-server probe size seed clean test ui ui-dev release
 
 all: agent server
+
+release: all
+	./scripts/package-release.sh v1.0.0
+
 
 ui:
 	cd ui && npm run build

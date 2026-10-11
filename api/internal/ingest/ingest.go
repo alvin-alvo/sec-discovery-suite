@@ -773,7 +773,25 @@ INSERT INTO tls_observations (
 	pid, exe, comm, unit, attribution, record_count, handshake_count,
 	appdata_count, alert_count, handshake_seq
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (run_id, conn_key) DO NOTHING;`)
+ON CONFLICT (run_id, conn_key) DO UPDATE SET
+	last_ts = excluded.last_ts,
+	tls_version = COALESCE(excluded.tls_version, tls_observations.tls_version),
+	cipher_suite = COALESCE(excluded.cipher_suite, tls_observations.cipher_suite),
+	kex_group = COALESCE(excluded.kex_group, tls_observations.kex_group),
+	pqc_class = COALESCE(excluded.pqc_class, tls_observations.pqc_class),
+	outcome = excluded.outcome,
+	peer_cert_fp = COALESCE(excluded.peer_cert_fp, tls_observations.peer_cert_fp),
+	peer_cert_source = COALESCE(excluded.peer_cert_source, tls_observations.peer_cert_source),
+	pid = COALESCE(excluded.pid, tls_observations.pid),
+	exe = COALESCE(excluded.exe, tls_observations.exe),
+	comm = COALESCE(excluded.comm, tls_observations.comm),
+	unit = COALESCE(excluded.unit, tls_observations.unit),
+	attribution = COALESCE(excluded.attribution, tls_observations.attribution),
+	record_count = excluded.record_count,
+	handshake_count = excluded.handshake_count,
+	appdata_count = excluded.appdata_count,
+	alert_count = excluded.alert_count,
+	handshake_seq = COALESCE(excluded.handshake_seq, tls_observations.handshake_seq);`)
 			if err != nil {
 				return fmt.Errorf("failed to prepare tls obs stmt: %w", err)
 			}

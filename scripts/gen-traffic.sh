@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DIR"
+
 DURATION=${1:-40}
 CERT=".test-certs/corpus/cert_and_key.pem"
 
@@ -8,6 +11,9 @@ if [ ! -f "$CERT" ]; then
     echo "Cert file $CERT not found, running seed..."
     make seed
 fi
+
+# Clean up any previous listeners on test ports
+fuser -k 8443/tcp 8444/tcp 2>/dev/null || true
 
 echo "Starting openssl s_server on 8443 (TLS 1.2)..."
 openssl s_server -accept 8443 -cert "$CERT" -key "$CERT" -tls1_2 -www >/dev/null 2>&1 &
@@ -20,6 +26,7 @@ PID_13=$!
 cleanup() {
     echo "Stopping background servers..."
     kill "$PID_12" "$PID_13" 2>/dev/null || true
+    fuser -k 8443/tcp 8444/tcp 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 

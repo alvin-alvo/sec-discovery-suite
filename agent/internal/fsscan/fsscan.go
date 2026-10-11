@@ -77,6 +77,11 @@ type fileJob struct {
 
 // Scan walks the specified roots and extracts certificate observations.
 func Scan(roots []string, now time.Time) (*ScanResult, error) {
+	return ScanStream(roots, now, nil)
+}
+
+// ScanStream walks the specified roots and streams discovered observations via onBatch.
+func ScanStream(roots []string, now time.Time, onBatch func([]*CertObservation) error) (*ScanResult, error) {
 	if len(roots) == 0 {
 		roots = DefaultRoots
 	}
@@ -218,20 +223,55 @@ func Scan(roots []string, now time.Time) (*ScanResult, error) {
 		}()
 	}
 
-	wg.Wait()
-	close(resultsCh)
-
 	allObs := append([]*CertObservation{}, rootObservations...)
 	allErrors := append([]*ScanError{}, rootErrors...)
 
-	for res := range resultsCh {
-		if len(res.obs) > 0 {
-			allObs = append(allObs, res.obs...)
-		}
-		if res.err != nil {
-			allErrors = append(allErrors, res.err)
+	if onBatch != nil && len(rootObservations) > 0 {
+		_ = onBatch(rootObservations)
+	}
+
+	// Wait for workers in background and close resultsCh when finished
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+
+	var batchBuf []*CertObservation
+	flushTicker := time.NewTicker(300 * time.Millisecond)
+	defer flushTicker.Stop()
+
+	flushBatch := func() {
+		if len(batchBuf) > 0 && onBatch != nil {
+			chunk := make([]*CertObservation, len(batchBuf))
+			copy(chunk, batchBuf)
+			batchBuf = batchBuf[:0]
+			_ = onBatch(chunk)
 		}
 	}
+
+	done := false
+	for !done {
+		select {
+		case res, ok := <-resultsCh:
+			if !ok {
+				done = true
+				break
+			}
+			if len(res.obs) > 0 {
+				allObs = append(allObs, res.obs...)
+				batchBuf = append(batchBuf, res.obs...)
+				if len(batchBuf) >= 50 {
+					flushBatch()
+				}
+			}
+			if res.err != nil {
+				allErrors = append(allErrors, res.err)
+			}
+		case <-flushTicker.C:
+			flushBatch()
+		}
+	}
+	flushBatch()
 
 	// Sort observations deterministically by Path then ChainPosition
 	sort.Slice(allObs, func(i, j int) bool {

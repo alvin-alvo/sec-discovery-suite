@@ -1,5 +1,6 @@
 # Cryptographic Discovery Suite (`sec-discovery-suite`)
 
+[![Latest Release](https://img.shields.io/github/v/release/alvin-alvo/sec-discovery-suite?color=blue&label=Latest%20Release)](https://github.com/alvin-alvo/sec-discovery-suite/releases/latest)
 [![Target: Ubuntu 24.04](https://img.shields.io/badge/Target%20OS-Ubuntu%2024.04%20LTS-E95420?logo=ubuntu&logoColor=white)](#)
 [![Agent Size: <2.5MB](https://img.shields.io/badge/Agent%20Size-2.43%20MB%20(Packed)-10b981)](#)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
@@ -9,7 +10,35 @@ A high-performance cryptographic discovery and network telemetry platform engine
 
 The platform consists of a statically compiled Go agent (&le; 2.5 MB packed), an embedded DuckDB analytics server, and an embedded React 19 web dashboard featuring automated relationship mapping (`Host` &rarr; `Process` &rarr; `Endpoint` &rarr; `Certificate`).
 
+![Cryptographic Discovery Suite Live Walkthrough](docs/images/sds_walkthrough.gif)
+
 ---
+
+## Standalone Binary Release (Direct Download)
+
+Pre-built Linux x86_64 binaries are available directly on the [GitHub Latest Release Page](https://github.com/alvin-alvo/sec-discovery-suite/releases/latest).
+
+Reviewers and users can test the complete suite on Ubuntu in under 60 seconds without installing Go, Node.js, DuckDB, or compiler toolchains:
+
+```bash
+# 1. Download release bundle from the latest release
+curl -sLO https://github.com/alvin-alvo/sec-discovery-suite/releases/latest/download/sds-v1.0.0-linux-amd64.tar.gz
+
+
+# 2. Verify SHA-256 checksum
+echo "d23f85dc95f2108449e99ab63d5d085a9b7924b78b718c2ccd83502673242044  sds-v1.0.0-linux-amd64.tar.gz" | sha256sum --check
+
+
+# 3. Extract and launch
+tar -xzf sds-v1.0.0-linux-amd64.tar.gz
+cd sds-v1.0.0-linux-amd64
+./start.sh
+```
+
+The `./start.sh` launcher initializes the agent and server, opens `http://127.0.0.1:8080` in your default browser, and synchronizes secure authentication tokens automatically.
+
+---
+
 
 ## Overview
 
@@ -77,14 +106,18 @@ The web interface is organized into three primary views:
 ---
 
 ### Step 2: Observing Live TLS Network Traffic
-TLS discovery uses passive packet capture. To observe connections, network traffic must be active during the capture window.
+TLS discovery uses purely passive, non-intrusive packet capture (`AF_PACKET` raw sockets). The agent captures 100% genuine system network traffic passing through the kernel. Zero mock or synthetic data is ever injected into production scans.
 
-1. In a separate terminal, launch the included multi-protocol traffic generator:
-   ```bash
-   ./scripts/gen-traffic.sh 40
-   ```
-   *This starts local test services on port 8443 (TLS 1.2) and port 8444 (TLS 1.3), issuing continuous requests for 40 seconds.*
-2. In the web dashboard header, click **Run TLS Scan**.
+Because observation is passive, TLS handshakes must actively occur during the scan window to be captured. If no applications initiate TLS connections during the window, the scan legitimately reports 0 observations.
+
+- **Real System Traffic:** Legitimate system activity (web browsing, API requests, `curl`, `git fetch`, package managers, background daemon connections) is immediately captured and mapped to its originating process.
+- **Simulating Test Traffic (Optional):** In testing or evaluation environments without natural background traffic, launch the included test traffic script in a separate terminal:
+  ```bash
+  ./scripts/gen-traffic.sh 40
+  ```
+  *This starts local test services on port 8443 (TLS 1.2) and port 8444 (TLS 1.3), issuing test requests for 40 seconds.*
+
+1. In the web dashboard header, click **Run TLS Scan**.
 3. The agent initiates an `AF_PACKET` capture session for 30 seconds. A progress indicator tracks elapsed time.
 4. Once complete, click the run row to view the **TLS Metadata Report**:
    - **Metrics:** Displays Total Events, Connections, Endpoints, Certificates Observed, and Graph Relationships.
@@ -138,7 +171,103 @@ sudo ./bin/sds-agent scan tls --duration 15s --json
 
 ---
 
+## Feature Walkthrough & Visual Tour
+
+### 1. Unified Discovery Runs Dashboard
+Monitor agent health, observe recent execution history across filesystem and network discovery, and inspect live operational run metrics.
+
+![Discovery Runs Dashboard](docs/images/01_dashboard_overview.png)
+
+Key capabilities:
+- Real-time agent status chip reporting version, privilege level, and packed binary memory footprint.
+- Historical scan histogram and execution duration timelines.
+- One-click triggers for Filesystem audits and passive TLS network captures.
+- Background automated scan scheduler modal.
+
+---
+
+### 2. In-App Documentation, Operational Guide & Copyright Modal
+Click the information `i` button in the top navigation bar to access full in-app architectural documentation, operation procedures, and legal attribution without leaving the interface.
+
+![In-App System Information Modal](docs/images/02_system_info_modal.png)
+
+Key capabilities:
+- Architectural explanation of passive packet capture and CBOM projection layers.
+- Operational guide detailing manual triggers, CLI usage, and test traffic generation.
+- Full GPLv3 license terms and copyright attribution to Alvin Alvo ([https://github.com/alvin-alvo/sec-discovery-suite](https://github.com/alvin-alvo/sec-discovery-suite)).
+- Complete attribution of embedded open-source libraries (DuckDB, React Flow, TanStack Query, Lucide).
+
+---
+
+### 3. Filesystem Certificate Discovery & Deduplication Report
+Traverse host directory trees, detect X.509 certificates across PEM, DER, and PKCS#12 formats, and deduplicate certificates by SHA-256 fingerprint.
+
+![Filesystem Discovery Report](docs/images/03_fs_discovery_report.png)
+
+Key capabilities:
+- Executive summary metrics: Total found, unique fingerprints, duplicate references, valid, expiring (<=30d), and expired.
+- Dynamic infinite-scroll table loading certificates on demand via TanStack Query and IntersectionObserver sentinels.
+- Validity posture donut chart and key algorithm distribution histogram (RSA 2048/4096, ECDSA P-256/P-384, Ed25519).
+- Faceted filtering by algorithm, validity status, container format, and parse health.
+
+---
+
+### 4. Slide-Out Certificate Inspection Drawer
+Click any certificate row in the filesystem report to slide out an in-depth cryptographic property inspector.
+
+![Certificate Inspection Drawer](docs/images/04_cert_inspection_drawer.png)
+
+Key capabilities:
+- Full SHA-256 certificate fingerprint with one-click clipboard copying.
+- Complete Subject Alternative Names (SAN) parsing (DNS names, email addresses, URIs, IP addresses).
+- Certificate chain position, file system permissions, and file size in bytes.
+- Exact validity window (`Not Before` and `Not After` timestamps).
+- Process ownership resolution attributing certificates to active system processes and users.
+
+---
+
+### 5. Passive TLS Metadata Telemetry Report
+Passively observe live TLS network connections traversing system interfaces via Linux raw sockets (`AF_PACKET`) without session termination or decryption.
+
+![TLS Metadata Scan Report](docs/images/05_tls_metadata_report.png)
+
+Key capabilities:
+- Real-time telemetry counters tracking observed packets, flows, unique endpoints, and certificates.
+- Mathematical Evidence Audit Expander: Audits exact event sums (`Total Events = Handshake + Application Data + Alert`).
+- Protocol breakdown charts highlighting TLS 1.2 vs. TLS 1.3 usage across system connections.
+- Activity timeline tracking connection rates across 5-second buckets.
+
+---
+
+### 6. Interactive Cryptographic Relationship Map
+Project discovered assets into a multi-tier directed acyclic graph linking `Host` -> `Process` -> `Endpoint` -> `Certificate`.
+
+![Cryptographic Relationship Map](docs/images/06_cryptographic_relationship_map.png)
+
+Key capabilities:
+- Dagre-directed hierarchical graph layout powered by React Flow with custom dark-slate node styling.
+- High-contrast zoom and viewport controls designed for dark-mode operational environments.
+- Prominent amber and red risk rings highlighting expired certificates or deprecated algorithms.
+- Scope toggle supporting single-run topology vs. cumulative host lifetime graph.
+
+---
+
+### 7. Deep Network Flow & Cipher Suite Inspection
+Expand destination endpoint rows to view individual network flows, attributed system processes, and negotiated cryptographic parameters.
+
+![Observed Network Endpoints and Flows](docs/images/07_endpoint_flow_details.png)
+
+Key capabilities:
+- Plaintext cipher suite identification (e.g., `TLS_AES_256_GCM_SHA384`, `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`).
+- Process attribution mapping socket inodes directly to executing binaries (e.g., `/usr/bin/curl [PID 22302]`).
+- Direction classification (`Outbound` vs. `Inbound`).
+- Handshake sequencing verification (`ClientHello`, `ServerHello`, `ChangeCipherSpec`).
+- Post-Quantum Cryptography (PQC) classification flags (`Classical`, `Hybrid`, `PQC`).
+
+---
+
 ## Technical Architecture
+
 
 ```mermaid
 flowchart LR
@@ -331,6 +460,9 @@ In accordance with transparent engineering disclosure:
 
 ---
 
-## License
+## License and Copyright
 
-GNU General Public License v3.0 (GPLv3). See [LICENSE](LICENSE) for details.
+Copyright (C) 2026 Alvin Alvo ([https://github.com/alvin-alvo/sec-discovery-suite](https://github.com/alvin-alvo/sec-discovery-suite)). All rights reserved.
+
+Licensed under the GNU General Public License v3.0 (GPLv3). See [LICENSE](LICENSE) for details.
+

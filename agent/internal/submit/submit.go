@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	BatchSize  = 500
+	BatchSize  = 100
 	MaxRetries = 3
 	Version    = "0.1.0"
 )
@@ -104,7 +104,7 @@ func NewClient(callbackBase, runID, token string) *Client {
 		CallbackBase: strings.TrimRight(callbackBase, "/"),
 		RunID:        runID,
 		Token:        token,
-		HTTPClient:   &http.Client{Timeout: 15 * time.Second},
+		HTTPClient:   &http.Client{Timeout: 60 * time.Second},
 	}
 }
 

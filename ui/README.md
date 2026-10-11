@@ -71,3 +71,12 @@ npm run build
 ```
 
 Running `make server` automatically builds the UI and embeds the distribution bundle into `bin/sds-server`.
+
+---
+
+## License & Copyright
+
+Copyright (C) 2026 Alvin Alvo ([https://github.com/alvin-alvo/sec-discovery-suite](https://github.com/alvin-alvo/sec-discovery-suite)). All rights reserved.
+
+Licensed under GNU General Public License v3.0 (GPLv3).
+

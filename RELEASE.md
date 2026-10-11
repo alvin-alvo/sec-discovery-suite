@@ -6,18 +6,40 @@ This guide is designed for reviewers and evaluators to test **Cryptographic Disc
 
 ## 1. GitHub Release Structure
 
-When creating a GitHub Release (e.g., `v1.0.0`), attach the following precompiled assets:
+All precompiled assets and official distribution tarballs are available on the [GitHub Latest Release Page](https://github.com/alvin-alvo/sec-discovery-suite/releases/latest).
+
+When downloading or packaging a release, the following artifacts are provided:
 
 | Asset Name | Description | Size |
 |---|---|---|
+| `sds-v1.0.0-linux-amd64.tar.gz` | Complete standalone release package with `start.sh`, binaries, scripts, and documentation | ~28 MB |
 | `sds-agent` | Statically linked Linux x86_64 agent binary (UPX-compressed) | ~2.4 MB |
 | `sds-server` | Linux x86_64 server binary with embedded DuckDB & Web UI | ~63 MB |
-| `demo-suite.tar.gz` | Archive containing helper scripts (`gen-traffic.sh`, `caps.sh`) and `.test-certs/corpus` | ~50 KB |
 | `SHA256SUMS` | SHA-256 checksum file for all release artifacts | <1 KB |
 
 ---
 
-## 2. Reviewer Plug-and-Play Quickstart Script
+## 2. Reviewer Plug-and-Play Quickstart (60 Seconds)
+
+Reviewers can test the suite directly on Ubuntu (24.04 or 22.04 LTS) by downloading the latest bundle:
+
+```bash
+# 1. Download release bundle from GitHub latest release
+curl -sLO https://github.com/alvin-alvo/sec-discovery-suite/releases/latest/download/sds-v1.0.0-linux-amd64.tar.gz
+
+# 2. Verify SHA-256 checksum
+echo "d23f85dc95f2108449e99ab63d5d085a9b7924b78b718c2ccd83502673242044  sds-v1.0.0-linux-amd64.tar.gz" | sha256sum --check
+
+
+# 3. Extract and launch
+tar -xzf sds-v1.0.0-linux-amd64.tar.gz
+cd sds-v1.0.0-linux-amd64
+./start.sh
+```
+
+---
+
+## 3. Automated Reviewer Setup Script (Alternative)
 
 Reviewers can run the following bash script on Ubuntu (24.04 or 22.04 LTS) to download, configure, and launch the platform:
 
@@ -147,3 +169,12 @@ wait $SERVER_PID
 2. Toggle the switch for **Filesystem Scan** or **TLS Scan**.
 3. Select an interval of **30 seconds (demo)**.
 4. Watch as scheduled runs automatically appear with `trigger = scheduled` upon each interval tick without interrupting manual operations.
+
+---
+
+## License & Copyright
+
+Copyright (C) 2026 Alvin Alvo ([https://github.com/alvin-alvo/sec-discovery-suite](https://github.com/alvin-alvo/sec-discovery-suite)). All rights reserved.
+
+Distributed under the GNU General Public License v3.0 (GPLv3). See [LICENSE](LICENSE) for details.
+

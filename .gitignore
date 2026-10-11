@@ -8,3 +8,7 @@ ui/dist/
 .env
 .sds_token
 *.sds_token
+.chrome/
+.ff_prof/
+dist/
+

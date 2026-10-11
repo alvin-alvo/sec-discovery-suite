@@ -194,7 +194,37 @@ func (s *Server) handleScanFS(w http.ResponseWriter, r *http.Request) {
 		startedAt := time.Now()
 		s.Logger.Info("starting fs scan", "run_id", req.RunID, "roots", req.Roots)
 
-		res, err := fsscan.Scan(req.Roots, startedAt)
+		client := submit.NewClient(req.CallbackBase, req.RunID, s.Token)
+		seq := 1
+		var seqMu sync.Mutex
+
+		type fsBatchJob struct {
+			seq   int
+			chunk []*fsscan.CertObservation
+		}
+		batchCh := make(chan fsBatchJob, 100)
+		var sendWg sync.WaitGroup
+		sendWg.Add(1)
+		go func() {
+			defer sendWg.Done()
+			for b := range batchCh {
+				if err := client.SendFSBatch(b.seq, b.chunk); err != nil {
+					s.Logger.Warn("failed to stream live fs batch", "run_id", req.RunID, "seq", b.seq, "err", err)
+				}
+			}
+		}()
+
+		res, err := fsscan.ScanStream(req.Roots, startedAt, func(chunk []*fsscan.CertObservation) error {
+			seqMu.Lock()
+			curSeq := seq
+			seq++
+			seqMu.Unlock()
+
+			batchCh <- fsBatchJob{seq: curSeq, chunk: chunk}
+			return nil
+		})
+		close(batchCh)
+		sendWg.Wait()
 		finishedAt := time.Now()
 
 		var logs []submit.LogEntry
@@ -205,13 +235,15 @@ func (s *Server) handleScanFS(w http.ResponseWriter, r *http.Request) {
 				Level: "error",
 				Msg:   fmt.Sprintf("scan failed: %v", err),
 			})
-			res = &fsscan.ScanResult{
-				Observations: nil,
-				Errors: []*fsscan.ScanError{{
-					Code:    "walk_error",
-					Message: err.Error(),
-					Path:    nil,
-				}},
+			if res == nil {
+				res = &fsscan.ScanResult{
+					Observations: nil,
+					Errors: []*fsscan.ScanError{{
+						Code:    "walk_error",
+						Message: err.Error(),
+						Path:    nil,
+					}},
+				}
 			}
 		} else {
 			s.Logger.Info("fs scan complete", "run_id", req.RunID, "observations", len(res.Observations), "errors", len(res.Errors))
@@ -222,9 +254,24 @@ func (s *Server) handleScanFS(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
-		client := submit.NewClient(req.CallbackBase, req.RunID, s.Token)
-		if err := client.SubmitFSResult(res, startedAt, finishedAt, logs); err != nil {
-			s.Logger.Error("failed to submit scan results", "run_id", req.RunID, "err", err)
+		statusHint := "completed"
+		if len(res.Errors) > 0 {
+			statusHint = "partial"
+		}
+
+		completePayload := submit.CompletePayload{
+			StatusHint:    statusHint,
+			StartedAt:     startedAt.UTC().Format(time.RFC3339),
+			FinishedAt:    finishedAt.UTC().Format(time.RFC3339),
+			Agent:         submit.AgentInfo{Version: submit.Version, UID: os.Getuid(), Privileged: os.Getuid() == 0},
+			CaptureMethod: nil,
+			CaptureNote:   nil,
+			Errors:        res.Errors,
+			Logs:          logs,
+		}
+
+		if err := client.SendComplete(&completePayload); err != nil {
+			s.Logger.Error("failed to submit fs completion", "run_id", req.RunID, "err", err)
 		}
 	}()
 }
