@@ -1,12 +1,19 @@
-.PHONY: all agent probe size seed clean test
+.PHONY: all agent server run-server probe size seed clean test
 
-all: agent
+all: agent server
 
 agent:
 	@mkdir -p bin
 	cd agent && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w" -o ../bin/sds-agent ./cmd/sds-agent
 	upx --best --lzma -f bin/sds-agent
 	./scripts/check-size.sh bin/sds-agent 4500000
+
+server:
+	@mkdir -p bin
+	cd api && CGO_ENABLED=1 go build -trimpath -buildvcs=false -ldflags="-s -w" -o ../bin/sds-server ./cmd/sds-server
+
+run-server: server
+	./bin/sds-server
 
 probe:
 	@mkdir -p bin
@@ -25,6 +32,7 @@ seed:
 
 test:
 	cd agent && go test -v ./...
+	cd api && go test -v ./...
 
 clean:
-	rm -rf bin .test-certs
+	rm -rf bin .test-certs data/*.duckdb*
