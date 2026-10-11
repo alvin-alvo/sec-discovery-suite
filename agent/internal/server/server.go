@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,24 @@ func isAllowedCallback(callbackBase string) bool {
 func NewServer(addr string, token string, logger *slog.Logger) *Server {
 	if token == "" {
 		token = os.Getenv("SDS_TOKEN")
+	}
+	if token == "" {
+		for _, p := range []string{".sds_token", "data/.sds_token"} {
+			if b, err := os.ReadFile(p); err == nil {
+				t := strings.TrimSpace(string(b))
+				if t != "" {
+					token = t
+					break
+				}
+			}
+		}
+	} else {
+		if _, err := os.Stat("data"); err == nil {
+			_ = os.WriteFile("data/.sds_token", []byte(token), 0644)
+		}
+		if _, err := os.Stat("bin"); err == nil {
+			_ = os.WriteFile(".sds_token", []byte(token), 0644)
+		}
 	}
 	if logger == nil {
 		logger = slog.Default()

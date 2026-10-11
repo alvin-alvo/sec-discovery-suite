@@ -6,3 +6,5 @@ ui/dist/
 *.duckdb.wal
 .test-certs/
 .env
+.sds_token
+*.sds_token

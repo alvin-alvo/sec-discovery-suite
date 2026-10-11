@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +35,18 @@ func main() {
 	agentAddr := getEnv("SDS_AGENT_ADDR", "http://127.0.0.1:7471")
 	token := os.Getenv("SDS_TOKEN")
 	if token == "" {
+		for _, p := range []string{".sds_token", "data/.sds_token"} {
+			if b, err := os.ReadFile(p); err == nil {
+				t := strings.TrimSpace(string(b))
+				if t != "" {
+					token = t
+					slog.Info("Loaded authentication token from file", "path", p)
+					break
+				}
+			}
+		}
+	}
+	if token == "" {
 		var b [16]byte
 		if _, err := rand.Read(b[:]); err != nil {
 			slog.Error("Failed to generate random token", "err", err)
@@ -41,6 +54,12 @@ func main() {
 		}
 		token = hex.EncodeToString(b[:])
 		slog.Info("SDS_TOKEN unset; generated random token for session", "token", token)
+	}
+	if _, err := os.Stat("data"); err == nil {
+		_ = os.WriteFile("data/.sds_token", []byte(token), 0644)
+	}
+	if _, err := os.Stat("bin"); err == nil {
+		_ = os.WriteFile(".sds_token", []byte(token), 0644)
 	}
 
 	callbackBase := getEnv("SDS_CALLBACK_BASE", "http://127.0.0.1:8080")
