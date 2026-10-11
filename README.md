@@ -2,7 +2,7 @@
 
 [![Target: Ubuntu 24.04](https://img.shields.io/badge/Target%20OS-Ubuntu%2024.04%20LTS-E95420?logo=ubuntu&logoColor=white)](#)
 [![Agent Size: <2.5MB](https://img.shields.io/badge/Agent%20Size-2.43%20MB%20(Packed)-10b981)](#)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](#)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Zero-Trust: Metadata Only](https://img.shields.io/badge/Security-Zero--Trust%20%7C%20Metadata--Only-cyan)](#)
 
 A high-performance, local cryptographic discovery and telemetry suite engineered for Ubuntu Linux. It audits filesystem X.509 certificates and passively observes TLS network connection metadata without capturing application payloads or private-key material.
@@ -174,4 +174,4 @@ In accordance with transparent engineering disclosure requirements:
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE) for details.
+GNU General Public License v3.0 (GPLv3). See [LICENSE](LICENSE) for details.
