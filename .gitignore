@@ -1,0 +1,8 @@
+bin/
+data/
+node_modules/
+ui/dist/
+*.duckdb
+*.duckdb.wal
+.test-certs/
+.env
