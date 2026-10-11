@@ -3,345 +3,337 @@
 [![Target: Ubuntu 24.04](https://img.shields.io/badge/Target%20OS-Ubuntu%2024.04%20LTS-E95420?logo=ubuntu&logoColor=white)](#)
 [![Agent Size: <2.5MB](https://img.shields.io/badge/Agent%20Size-2.43%20MB%20(Packed)-10b981)](#)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Zero-Trust: Metadata Only](https://img.shields.io/badge/Security-Zero--Trust%20%7C%20Metadata--Only-cyan)](#)
+[![Security: Metadata Only](https://img.shields.io/badge/Security-Zero--Trust%20%7C%20Metadata--Only-cyan)](#)
 
-> **Think of this as an automated X-Ray for your server's SSL/TLS certificates and encrypted network connections.**
->
-> It scans your local files to catalog every certificate on disk, catches expiring or duplicate certs before they take your services down, and passively listens to network traffic to map which running programs are talking to which websites and over what encryption protocols.
->
-> **100% Local & Zero-Trust:** Never reads passwords, never captures private keys, never records message payloads, and requires zero external cloud connections.
+A high-performance cryptographic discovery and network telemetry platform engineered for Ubuntu Linux. The suite audits filesystem X.509 certificates and passively observes TLS network connection metadata without capturing application payloads or private-key material.
+
+The platform consists of a statically compiled Go agent (&le; 2.5 MB packed), an embedded DuckDB analytics server, and an embedded React 19 web dashboard featuring automated relationship mapping (`Host` &rarr; `Process` &rarr; `Endpoint` &rarr; `Certificate`).
 
 ---
 
-## What Does This Tool Do? (In 30 Seconds)
+## Overview
 
-1. **Finds Every Certificate on Disk (Filesystem Discovery):**
-   Scans your folders to find SSL/TLS certificates (`.pem`, `.crt`, `.der`, `.p12`). It checks if any are **expired** or **expiring soon**, calculates cryptographic fingerprints to flag **wasted duplicates**, and identifies which local process (e.g., Nginx, Apache) owns them.
-2. **Watches Active Encrypted Connections (TLS Network Observation):**
-   Passively listens to network traffic for 15–30 seconds. It detects which apps (e.g., `curl`, Python, background daemons) are connecting over TLS, what TLS version is negotiated (modern **TLS 1.3** vs legacy **TLS 1.2**), and what cipher suites are used.
-3. **Draws an Interactive Cryptographic Map:**
-   Automatically builds a visual diagram linking your **Host** &rarr; **Running Programs (PIDs)** &rarr; **Remote Endpoints** &rarr; **Certificates**.
-4. **Safety Guarantee:**
-   Application data payloads (chat messages, database queries, web traffic) are dropped at the packet header level without ever being buffered or saved. Private keys are never read or stored.
+The suite provides complete cryptographic visibility into local Linux environments by combining two complementary discovery engines:
+
+1. **Filesystem Certificate Auditing:** Recursively traverses target directory trees to inventory X.509 certificates across PEM, DER, and PKCS#12 containers. Extracts validity ranges, subject alternative names (SANs), signature algorithms, and key sizes. Computes SHA-256 certificate fingerprints to deduplicate identical certificates stored across multiple filesystem locations. Detects associated private keys and resolves file ownership to active local processes.
+2. **Passive TLS Network Telemetry:** Captures raw network frames via `AF_PACKET` sockets to passively reconstruct TLS 1.2 and TLS 1.3 handshakes. Reassembles TCP segments up to a bounded 16 KB window to extract ClientHello (SNI, supported ciphers, supported groups/extensions) and ServerHello parameters. Correlates network connections to local processes (PIDs, binary paths, systemd units) by inspecting `/proc/net/tcp` and `/proc/*/fd`.
+3. **Active Post-Capture TLS 1.3 Probing:** Solves the TLS 1.3 encrypted certificate dilemma by performing a lightweight, non-intrusive TLS handshake against discovered endpoints immediately following the capture window, cataloging server certificate chains without intercepting application data.
+4. **Relational Graph Modeling:** Persists observations into an embedded DuckDB database and projects a directed relationship graph connecting host instances, executing processes, network endpoints, and presented certificates.
 
 ---
 
-## ⚡ Quickstart: Get Running in 60 Seconds
+## Quickstart
 
-You need two terminal windows open:
+### Prerequisites
+- Ubuntu Linux (tested on 24.04 LTS)
+- Pre-built binaries in `bin/` (`bin/sds-agent` and `bin/sds-server`)
 
+### 1. Set Authentication Token
 ```bash
-# In your terminal, set an authentication token:
 export SDS_TOKEN=$(openssl rand -hex 16)
 ```
 
-### Terminal 1: Start the Agent (Collector)
+### 2. Start the Agent (Terminal 1)
+The agent requires elevated network capture capabilities (`CAP_NET_RAW`, `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH`):
 ```bash
-# Run the lightweight agent with sudo (needed for raw packet sniffing):
 sudo SDS_TOKEN=$SDS_TOKEN ./bin/sds-agent serve
 ```
-*You will see: `sds-agent serving on 127.0.0.1:7471`*
+*Expected output: `sds-agent serving on 127.0.0.1:7471`*
 
-### Terminal 2: Start the Server & Web Dashboard
+### 3. Start the Server and Dashboard (Terminal 2)
+The backend server manages DuckDB storage, scheduled dispatching, and serves the embedded UI:
 ```bash
-# Run the API server with embedded DuckDB and React dashboard:
 SDS_TOKEN=$SDS_TOKEN SDS_AGENT_ADDR=http://127.0.0.1:7471 SDS_DB=data/sds.duckdb ./bin/sds-server
 ```
-*You will see: `sds-server listening on http://127.0.0.1:8080`*
+*Expected output: `sds-server listening on http://127.0.0.1:8080`*
 
-### Open Your Browser
-Navigate to: **[http://127.0.0.1:8080](http://127.0.0.1:8080)**
-
----
-
-## 🧭 Layman's Operating Guide (Step-by-Step)
-
-Here is a simple walkthrough showing exactly what buttons to click, what you will see, and what the results mean.
-
+### 4. Access the Dashboard
+Open your browser and navigate to:
 ```
-+-----------------------------------------------------------------------------------------+
-|                                    MAIN DASHBOARD                                       |
-|  [Logo] Cryptographic Discovery Suite              [Schedules] [Run FS Scan] [Run TLS]  |
-|                                                    (Green dot: Agent Connected)         |
-+-----------------------------------------------------------------------------------------+
-|  Discovery Runs Table                                                                   |
-|  Status   | Type | Duration | Findings                    | Started At   | Action       |
-|  -------------------------------------------------------------------------------------  |
-|  [Partial]| FS   | 2.1s     | 13 Found, 8 Unique, 5 Dups  | 2 mins ago   | View Report >|
-|  [Success]| TLS  | 30.0s    | 4 Endpoints, 12 Connections | Just now     | View Report >|
-+-----------------------------------------------------------------------------------------+
+http://127.0.0.1:8080
 ```
 
 ---
 
-### Mission 1: Audit Certificates on Disk (Filesystem Scan)
+## Operating Instructions
 
-This mission scans your server's folders to catalog every certificate file and find any that are broken or expired.
-
-1. **Check Agent Status:** Look at the top right of the dashboard. Ensure the indicator shows a green dot and `Agent v0.1.0 • privileged`.
-2. **Click `Run Filesystem Scan`:** Click the blue button in the top-right header.
-3. **Watch the Scan Run:**
-   - A new row appears at the top of the **Discovery Runs** table with state `running`.
-   - In approximately 2 seconds, it finishes and switches to **`partial`** (or `success`).
-   - *Why does it say `partial`?* That is normal and expected! The scanner safely skipped a protected test directory without crashing or stopping the audit for the rest of your system.
-4. **Open the Report:** Click anywhere on that run's row in the table to open the **Filesystem Discovery Report**.
-5. **How to Read the Report:**
-   - **8 Metric Cards:**
-     - **Found (13):** Total certificate files detected across your disk.
-     - **Unique (8):** Distinct certificates based on SHA-256 fingerprinting.
-     - **Duplicates (5):** Identical certificates copied into multiple folders (clean these up to save storage and prevent confusion!).
-     - **Valid / Expiring / Expired:** Shows how many certs are safe, how many expire in under 30 days (amber warning), and how many are already expired (red danger).
-   - **Validity Donut Chart:** Hover your mouse over the donut chart slices to see proportions of valid vs expired certificates.
-   - **Key Size & Algorithm Bars:** See what percentage of your certificates use RSA 2048, ECDSA P-256, etc.
-   - **Search & Filter:** Type `expired` into the search box to immediately isolate certificates that need renewal.
-   - **Click any Certificate Row:** A drawer slides out from the right showing:
-     - The full **SHA-256 Fingerprint** (with a 1-click copy button).
-     - Subject Alternative Names (SANs) — all domain names covered by the cert.
-     - Which local process (e.g., `nginx`) owns the certificate file.
-     - Security badges such as `PRIVATE KEY` (flags files containing private keys so you can verify their file permissions).
+### Primary Navigation
+The web interface is organized into three primary views:
+- **Discovery Runs (`/runs`):** Monitor agent health, launch ad-hoc scans, inspect historical runs, and configure background scan schedules.
+- **Filesystem Discovery Report (`/runs/:id/fs`):** Detailed inventory of disk certificates, validity status, cryptographic algorithms, duplicate counts, and file ownership.
+- **TLS Telemetry Report (`/runs/:id/tls`):** Observed network flows, protocol versions, process attribution, evidence auditing, and the interactive relationship graph.
 
 ---
 
-### Mission 2: Inspect Live Network Encryption (TLS Scan)
+### Step 1: Running a Filesystem Certificate Audit
+1. Open the dashboard at `http://127.0.0.1:8080`.
+2. Confirm the agent status chip in the top-right header displays `Agent v0.1.0 • privileged`.
+3. Click **Run Filesystem Scan** in the header.
+4. A new run appears in the table with status `running`, completing in 1-3 seconds.
+5. Click the completed run row to open the **Filesystem Discovery Report**:
+   - **Summary Metrics:** Review Total Found, Unique Fingerprints, Duplicate Instances, Valid, Expiring (<30 days), and Expired counts.
+   - **Coverage Banner:** If the status is `partial`, the banner identifies directories that were safely skipped due to OS permissions (e.g., `/restricted_dir`), confirming that scanning completed across all accessible paths without failure.
+   - **Charts:** Inspect the Validity Distribution donut chart and Key Algorithm breakdown bars (e.g., RSA 2048, ECDSA P-256).
+   - **Certificate Table:** Use the search bar to filter by domain, fingerprint, or status.
+   - **Inspection Drawer:** Click any certificate row to open the drawer detailing full SHA-256 fingerprints, SAN lists, file paths, permissions, and owner process information. Badges indicate attributes like `PRIVATE KEY PRESENT` or `SYMLINK`.
 
-This mission passively listens to active network traffic to discover which programs are making encrypted connections and whether they are using modern cryptography.
+---
 
-> **Important Concept:** TLS scanning is **passive observation** (like a microphone in a room). If your server is completely quiet and no apps are making web requests during the scan, there will be zero connections to record!
->
-> Therefore, we generate test traffic first so you have real data to see.
+### Step 2: Observing Live TLS Network Traffic
+TLS discovery uses passive packet capture. To observe connections, network traffic must be active during the capture window.
 
-1. **Step 1: Generate Test Traffic (Terminal):**
-   Open a third terminal window and run our bundled traffic generator:
+1. In a separate terminal, launch the included multi-protocol traffic generator:
    ```bash
    ./scripts/gen-traffic.sh 40
    ```
-   *This starts test servers on port 8443 (forcing TLS 1.2) and port 8444 (forcing TLS 1.3), issuing continuous requests for 40 seconds.*
-
-2. **Step 2: Start the TLS Scan (Browser):**
-   In the web dashboard header, click the purple **`Run TLS Scan`** button.
-
-3. **Step 3: Wait for Capture:**
-   The agent will passively listen for **30 seconds**. You will see a live spinning progress indicator.
-
-4. **Step 4: Open the TLS Report:**
-   Once completed, click the TLS run's row in the table.
-
-5. **Step 5: How to Read the TLS Report:**
-   - **Top Metrics:** Shows **Total Events** (raw TLS record headers seen), **Connections**, **Unique Endpoints**, and **Certificates Observed**.
-   - **"How is this total computed?" Banner:** Click this expander to see the transparent mathematical formula showing how events break down into Handshake, Application Data, and Alert records.
-   - **Observed Network Flows Table:**
-     - Click the chevron (`>`) next to an endpoint (e.g., `127.0.0.1:8443` or `127.0.0.1:8444`) to see the individual connections.
-     - **TLS Version:** Shows `TLS 1.2` or `TLS 1.3`.
-     - **Cipher Suite:** The exact cipher negotiated (e.g., `TLS_AES_128_GCM_SHA256`).
-     - **Process Attribution:** Identifies the exact program and PID that made the connection (e.g., `curl [PID 12345]`).
-     - **Cert Source:** Shows `observed` for certificates sniffed passively over the wire, or `probed` for TLS 1.3 certificates fetched via the post-capture active probe.
+   *This starts local test services on port 8443 (TLS 1.2) and port 8444 (TLS 1.3), issuing continuous requests for 40 seconds.*
+2. In the web dashboard header, click **Run TLS Scan**.
+3. The agent initiates an `AF_PACKET` capture session for 30 seconds. A progress indicator tracks elapsed time.
+4. Once complete, click the run row to view the **TLS Metadata Report**:
+   - **Metrics:** Displays Total Events, Connections, Endpoints, Certificates Observed, and Graph Relationships.
+   - **Evidence Audit Expander:** Click *"How is this total computed?"* to inspect the mathematical breakdown of observed events across Handshake, Application Data, and Alert records.
+   - **Observed Network Flows:** Expand any destination endpoint to inspect individual connections:
+     - **TLS Version:** Shows negotiated protocol (`TLS 1.2` or `TLS 1.3`).
+     - **Cipher Suite:** Plaintext cipher suite negotiated (e.g., `TLS_AES_128_GCM_SHA256`).
+     - **Process Attribution:** Identifies the originating process name and PID (e.g., `curl [PID 8492]`).
+     - **Certificate Source:** Indicates `observed` for passively captured TLS 1.2 certificates, or `probed` for TLS 1.3 certificates retrieved via post-capture active probe.
+     - **PQC Posture:** Flags cryptographic classification (`Classical`, `Hybrid`, or `PQC`).
 
 ---
 
-### Mission 3: Explore the Interactive Relationship Map
-
-Scroll down to the bottom of the TLS Report page to interact with the **Cryptographic Relationship Map**.
-
-```
-[ Host: ubuntu-host ]
-        │
-        ▼
-[ Process: curl (PID 8492) ]
-        │
-        ▼
-[ Endpoint: 127.0.0.1:8444 ]
-        │
-        ▼
-[ Certificate: example.internal (Valid) ]
-```
-
-- **What It Represents:** An automatic visual graph connecting your server &rarr; running applications &rarr; remote web addresses &rarr; the certificates presented.
-- **How to Interact:**
-  - **Click & Drag:** Pan around the canvas or drag nodes to rearrange them.
-  - **Click any Bubble:** Click a process, endpoint, or certificate to open the properties drawer and see timestamps, ports, and metadata.
-  - **Line Thickness:** Thicker lines indicate connections with higher traffic volume.
-  - **Risk Rings:** Expired or weak certificates have red or amber warning rings around their nodes.
-  - **This Run vs Lifetime Toggle:** Use the switch above the graph to toggle between viewing only connections observed in this scan versus cumulative connections seen across all scans.
+### Step 3: Interacting with the Relationship Map
+Scroll to the lower section of the TLS Report to interact with the **Cryptographic Relationship Map**:
+- **Graph Topology:** Visual layout organized hierarchically using Dagre:
+  `Host` &rarr; `Process` &rarr; `Endpoint` &rarr; `Certificate`
+- **Interactive Inspection:** Click any node (Process, Endpoint, or Certificate) to open its property inspector with timestamps, network addresses, and metadata.
+- **Edge Weighting:** Edge stroke widths are scaled logarithmically based on observation counts.
+- **Risk Ring Indicators:** Nodes with expired or weak cryptographic configurations display red or amber status rings.
+- **Scope Toggle:** Switch between **This Run** (edges observed within the current scan) and **Lifetime** (cumulative host graph across all runs).
 
 ---
 
-### Mission 4: Automate Regular Scans (Schedules)
-
-If you want the suite to continuously monitor your server without manual clicks:
-
-1. Click the **`Schedules`** button in the dashboard header.
-2. Toggle the switch to **ON** for Filesystem Scans or TLS Scans.
-3. Select an interval: choose **`30 seconds (demo)`** for rapid testing, or **`1 hour`** for production monitoring.
-4. Keep the dashboard open or let the server run: new scans will automatically execute on schedule and appear in your history marked with `Trigger: Scheduled`.
+### Step 4: Configuring Automated Background Schedules
+1. In the header bar, click **Schedules**.
+2. Toggle the switch to active for either Filesystem or TLS scans.
+3. Select an execution interval:
+   - `30 seconds (demo)`: For rapid validation and continuous testing.
+   - `15 minutes`, `1 hour`, `6 hours`, `24 hours`: For operational deployments.
+4. Scheduled executions trigger automatically in the background and are recorded with `Trigger: Scheduled`.
 
 ---
 
-### Mission 5: Prefer the Command Line? (Terminal CLI Mode)
-
-You can run scans directly in your terminal without opening the web browser:
+### Command-Line Interface (Headless Mode)
+Scans can be executed directly from the terminal without the web dashboard:
 
 ```bash
-# 1. Scan filesystem certificates and view human-readable summary:
+# Filesystem scan with human-readable output
 ./bin/sds-agent scan fs
 
-# 2. Output filesystem results as machine-readable JSON:
+# Filesystem scan with JSON Lines streaming output
 ./bin/sds-agent scan fs --json
 
-# 3. Passively sniff TLS connections for 15 seconds:
+# Passive TLS capture for 15 seconds
 sudo ./bin/sds-agent scan tls --duration 15s
 
-# 4. Sniff TLS connections and output structured JSON Lines:
+# Passive TLS capture with structured JSON output
 sudo ./bin/sds-agent scan tls --duration 15s --json
 ```
 
 ---
 
-## 📖 Layman's Glossary (What Do These Terms Mean?)
-
-| Term | What It Means in Plain English |
-|---|---|
-| **X.509 Certificate** | The digital ID card that websites and services use for HTTPS to prove their identity and encrypt communication. |
-| **Fingerprint (SHA-256)** | The unique cryptographic "fingerprint" of a certificate file. If two files have the same fingerprint, they are identical duplicates. |
-| **TLS 1.2 vs TLS 1.3** | TLS 1.3 is the newest, fastest, and most secure encryption standard. TLS 1.2 is safe but older. TLS 1.0 and 1.1 are obsolete and insecure. |
-| **Process Attribution** | Matching a network connection to the exact software application (like `nginx`, `curl`, or `python`) and its Process ID (PID) running on your server. |
-| **Active TLS 1.3 Probe** | TLS 1.3 hides and encrypts the certificate on the wire so passive sniffers cannot see it. Our agent performs a quick, lightweight probe to discover the certificate without decrypting your traffic. |
-| **PQC Posture** | Post-Quantum Cryptography readiness. Indicates whether your encryption algorithms could withstand attacks by future quantum computers. |
-| **Partial Status** | Indicates that a scan succeeded, but safely bypassed an OS permission-restricted directory without crashing. |
-
----
-
-## 🏗️ Architecture Under the Hood
-
-The suite operates entirely on the local host with zero external cloud dependencies.
+## Technical Architecture
 
 ```mermaid
 flowchart LR
     subgraph Host["Target Host (Ubuntu 24.04)"]
-        subgraph KernelNetwork["Network & Kernel Layer"]
-            AF["AF_PACKET Raw Socket\n(ETH_P_ALL)"]
+        subgraph KernelNetwork["Network & Kernel Subsystems"]
+            AF["AF_PACKET Raw Socket\n(SOCK_RAW, ETH_P_ALL)"]
             ProcNet["/proc/net/tcp{,6}\n& /proc/*/fd"]
         end
 
         subgraph StorageLayer["Local Filesystem"]
-            FSCerts["Cert Stores & Keys\n(/etc/ssl, /opt, corpus)"]
+            FSCerts["Certificate Stores\n(/etc/ssl, /opt, user dirs)"]
             DuckDB[("Embedded DuckDB\ndata/sds.duckdb")]
         end
 
-        subgraph SDS["sec-discovery-suite Architecture"]
-            Agent["sds-agent (Go)\n- UPX Packed (&le; 2.45 MB)\n- Passive TLS Sniffer\n- FS Walker & Parser\n- Process Attribution\n- Active TLS 1.3 Probe"]
-            Server["sds-server (Go + Embedded UI)\n- HTTP REST API (:8080)\n- Embedded DuckDB Store\n- Graph & Facet Engine\n- Task Dispatcher & Cron"]
-            UI["Embedded Web UI\n(Vite + React 19 + Dagre)\n- Runs & Schedules\n- FS Inventory & Donut\n- TLS Evidence Audit\n- Interactive React Flow"]
+        subgraph SDS["sec-discovery-suite Components"]
+            Agent["sds-agent (Go)\n- Statically linked, UPX packed (&le; 2.45 MB)\n- Raw socket sniffer (AF_PACKET)\n- Bounded stream reassembly (16 KB)\n- Process inode resolver\n- Active TLS 1.3 probe"]
+            Server["sds-server (Go + Embedded UI)\n- REST API (:8080)\n- Embedded DuckDB analytics engine\n- Graph projection & evidence auditing\n- Task scheduler"]
+            UI["Embedded Web UI\n(Vite + React 19 + Dagre)\n- Runs & schedules management\n- FS & TLS reporting\n- Interactive React Flow graph"]
         end
     end
 
-    %% Interactions
     AF -->|L2/L3/L4 Frames| Agent
-    ProcNet -->|Inode to PID| Agent
-    FSCerts -->|Read & Sniff| Agent
+    ProcNet -->|Socket Inodes to PID| Agent
+    FSCerts -->|Read & Parse| Agent
 
-    Server -->|"POST /v1/scan/{fs,tls}\n(Bearer Token Auth)"| Agent
-    Agent -->|"Batched Ingest & /complete\n(Loopback Callback)"| Server
+    Server -->|"POST /v1/scan/{fs,tls}\n(Bearer Auth)"| Agent
+    Agent -->|"POST /api/v1/ingest/*\n(Loopback Callback)"| Server
 
-    Server -->|Read / Write SQL| DuckDB
-    Server -->|Serves Single Binary| UI
+    Server -->|SQL Queries| DuckDB
+    Server -->|Serves Embedded Assets| UI
     UI -->|REST API /api/v1/*| Server
 ```
 
 ---
 
-## 🔒 Security & Privacy Guarantees
+## Deep Technical Specifications
 
-1. **No Private-Key Exposure:**
-   When encountering files containing `PRIVATE KEY` blocks, the agent inspects file permissions and records `contains_private_key = true` without reading, logging, or saving the private key material.
-2. **No Payload Capture or Decryption:**
-   The sniffer examines only packet headers (Ethernet, IP, TCP) and TLS record headers. As soon as Application Data (type 23) headers are detected, payload bytes are immediately discarded.
-3. **Loopback-Only Command Channel:**
-   The agent (`127.0.0.1:7471`) and API server (`127.0.0.1:8080`) bind strictly to local loopback addresses by default.
-4. **Constant-Time Authentication:**
-   All communication between the agent and server uses shared bearer tokens verified via constant-time byte comparison (`crypto/subtle.ConstantTimeCompare`).
+### 1. Passive TLS Sniffer Engine (`afpacket_linux.go`, `tlsparse.go`, `reasm.go`)
+- **Raw Socket Capture:** Initializes an `AF_PACKET` raw socket bound to `ETH_P_ALL` using `SOCK_RAW`. Bypasses standard transport stacks to receive frames across all interfaces.
+- **Loopback Deduplication:** On the Linux loopback interface (`lo`), the kernel delivers both egress and ingress packets to raw socket listeners. The sniffer tracks the interface index and evaluates `sockaddr_ll.pkttype`. Outgoing loopback frames (`PACKET_OUTGOING`) are filtered to prevent double-counting connections.
+- **Packet Protocol Decoding:** Hand-crafted binary parsers decode Ethernet headers (handling 802.1Q VLAN tags), IPv4 and IPv6 packet headers, and TCP segment headers without third-party C/pcap dependencies.
+- **Bounded Stream Reassembly:** Reassembles out-of-order TCP segments on a per-flow 4-tuple key (`src_ip:src_port` &rarr; `dst_ip:dst_port`). Flow state is bounded to a maximum buffer of 16 KB per stream to capture initial TLS handshakes while bounding memory overhead.
+- **TLS Record Parsing:** Decodes TLS Record Layer headers:
+  - Content Type 20 (ChangeCipherSpec)
+  - Content Type 21 (Alert)
+  - Content Type 22 (Handshake)
+  - Content Type 23 (Application Data)
+- **Handshake Message Extraction:**
+  - **ClientHello:** Parses extension 0 (Server Name Indication / SNI), extension 43 (`supported_versions`), and extension 51 (`key_share` / named groups).
+  - **ServerHello:** Parses negotiated cipher suite, protocol version, and key exchange group.
+  - **Certificate (TLS &le; 1.2):** Parses ASN.1 DER certificate sequences transmitted in plaintext.
+- **Post-Quantum Cryptography (PQC) Evaluation:** Inspects supported groups and key shares for post-quantum algorithms (e.g., X25519MLKEM768, ML-KEM-768). Classifies connection posture as `Classical`, `Hybrid`, or `PQC`.
+
+### 2. Active Post-Capture TLS 1.3 Probe (`probe.go`)
+- **Problem Statement:** In TLS 1.3, the server's `Certificate` message is encrypted under handshake keys derived from ephemeral Diffie-Hellman exchanges. Passive listeners cannot extract certificate metadata on the wire.
+- **Solution Architecture:** When the passive sniffer observes a completed TLS 1.3 handshake on an endpoint where no certificate was captured, the agent schedules a post-capture probe.
+- **Execution:** Immediately following the capture window, the agent issues a lightweight `tls.Dial` with a 3-second timeout and `InsecureSkipVerify: true`. It retrieves the peer certificate chain directly from the TLS connection state and immediately closes the connection, achieving complete certificate visibility without decrypting user payloads.
+
+### 3. Process Attribution Subsystem (`procnet.go`, `/proc/*/fd`)
+- **Kernel State Inspection:** Reads `/proc/net/tcp` and `/proc/net/tcp6` to obtain active local socket states. Decodes hexadecimal local and remote address representations into standard network byte order.
+- **Inode Mapping:** Matches the 4-tuple connection endpoint to the kernel socket inode number.
+- **File Descriptor Traversal:** Scans `/proc/[pid]/fd/` for running processes, inspecting symlinks targeting `socket:[<inode>]`.
+- **Metadata Enrichment:** Upon finding a matching inode, extracts:
+  - Process ID (PID)
+  - Binary executable path via `/proc/[pid]/exe`
+  - Command name via `/proc/[pid]/comm`
+  - Systemd service unit via `/proc/[pid]/cgroup`
+
+### 4. Filesystem Discovery Engine (`fsscan.go`, `certinfo/`)
+- **Container Formats:** Sniffs and parses X.509 certificates stored in:
+  - PEM blocks (`BEGIN CERTIFICATE`)
+  - Raw binary ASN.1 DER files
+  - PKCS#12 archives (`.p12`, `.pfx`), parsed using empty password extraction for public certificates
+- **Symlink Protection:** Resolves canonical paths and maintains an inode visit set to prevent infinite loops caused by cyclic symbolic links.
+- **Deduplication Strategy:** Calculates the SHA-256 hash across raw public certificate bytes. Multiple filesystem instances sharing an identical fingerprint are aggregated under a single logical certificate record with multiple location references.
+- **Private Key Safeguards:** Detects adjacent or embedded `PRIVATE KEY` blocks. When identified, sets `contains_private_key = true` and records file permissions without reading, logging, or storing private-key bytes.
+
+### 5. Embedded Analytics and Data Model (DuckDB)
+The server embeds DuckDB via CGO bindings, operating against `data/sds.duckdb`:
+- **Core Relations:**
+  - `discovery_runs`: Execution state, scan type (`fs`, `tls`), trigger origin, timestamps, error summaries.
+  - `fs_certificates`: Ingested certificate attributes, validity dates, SAN lists, key algorithms, fingerprints, duplicate counts, owner processes.
+  - `tls_observations`: Captured connection events, 4-tuple addresses, TLS versions, cipher suites, PQC classifications, PIDs.
+  - `tls_evidence_counts`: Event counts partitioned by record type (handshake, application data, alert) for mathematical verification.
+  - `graph_nodes` & `graph_edges`: Materialized graph entities and directed relationships with observation weights.
+- **Evidence Verification Query:**
+  The server provides an evidence endpoint (`/api/v1/runs/{id}/tls/evidence`) computing:
+  $$\text{Total Events} = \text{Handshake Events} + \text{Application Data Events} + \text{Alert Events}$$
+  Ensuring full auditability between captured wire packets and displayed metrics.
 
 ---
 
-## 🛠️ Building from Source
+## Security and Zero-Trust Model
 
-### Prerequisites
-- **OS:** Ubuntu Linux (tested on 24.04 LTS)
-- **Go:** 1.22+
-- **Node.js:** v20+ / npm v10+
-- **Packages:** `make`, `gcc`, `g++`, `upx-ucl`, `openssl`, `curl`, `jq`
+1. **Zero Payload Retention:** Application data records (TLS content type 23) are counted at the record header and immediately discarded from the reassembly buffer. Payload data is never buffered, stored to disk, or transmitted.
+2. **Zero Private-Key Material Exposure:** Private key bytes are never extracted or saved. The presence of private keys is noted solely as a security boolean (`contains_private_key = true`).
+3. **Loopback-Constrained IPC:** Both the agent command listener (`127.0.0.1:7471`) and server API (`127.0.0.1:8080`) bind exclusively to loopback interfaces. The agent validates `callback_base` URLs and rejects any target outside `127.0.0.1`, `::1`, or `localhost` (HTTP 400).
+4. **Constant-Time Authentication:** Requests between the server, agent, and clients are authenticated using a shared bearer token validated via `crypto/subtle.ConstantTimeCompare`.
+5. **No External Network Dependencies:** The platform requires no internet connectivity, external SaaS dependencies, or third-party cloud telemetry.
 
-```bash
-# Clone the repository
-git clone https://github.com/alvin-alvo/sec-discovery-suite.git
-cd sec-discovery-suite
+---
 
-# 1. Build the Agent (<2.5MB UPX binary)
-make agent
+## Linux Privilege Model and Capabilities
 
-# 2. Build the Server (compiles React UI and embeds into Go binary)
-make server
+The backend server runs entirely unprivileged. The agent requires three Linux capabilities:
 
-# 3. Generate Seed Certificate Corpus for testing
-make seed
+| Capability | Kernel Purpose | Operational Rationale |
+|---|---|---|
+| `CAP_NET_RAW` | Required for `socket(AF_PACKET, SOCK_RAW, ...)` | Allows passive capture of network frames across network devices. |
+| `CAP_DAC_READ_SEARCH` | Bypasses file read and directory search checks | Enables auditing certificates in protected stores (e.g., `/etc/ssl/private`). |
+| `CAP_SYS_PTRACE` | Allows reading `/proc/[pid]/fd` of other users | Enables mapping network socket inodes to processes owned by other system users. |
 
-# 4. Run test suites across all modules
-make test
-```
-
-### Verifying Agent Binary Size Budget
-The agent includes a strict build budget enforcing that the binary remains &le; 4.5 MB:
-```bash
-./scripts/check-size.sh bin/sds-agent 4500000
-# Output: bin/sds-agent size: 2435208 bytes (max allowed: 4500000 bytes) - PASS
-```
-
-### Linux Capabilities
-To run the agent without `sudo`, grant specific capabilities using the included helper script:
+### Assigning Capabilities via `scripts/caps.sh`
 ```bash
 ./scripts/caps.sh bin/sds-agent
 ```
-| Capability | Purpose |
-|---|---|
-| `CAP_NET_RAW` | Required for raw packet sniffing via `AF_PACKET` |
-| `CAP_DAC_READ_SEARCH` | Allows reading certificates in protected locations (e.g., `/etc/ssl/private`) |
-| `CAP_SYS_PTRACE` | Allows inspecting `/proc/*/fd` to attribute sockets to other users' processes |
-
-*Note: If file capabilities are restricted in your environment, running with `sudo` is always supported.*
+*Note: In environments where setting file capabilities on compressed binaries is prohibited by the filesystem, running the agent with `sudo` is the standard operational path.*
 
 ---
 
-## ❓ Frequently Asked Questions (Troubleshooting)
+## Building from Source
 
-<details>
-<summary><b>Why does my TLS scan show 0 connections?</b></summary>
-TLS scanning is passive listening. If no applications on your machine made HTTPS or TLS connections during those 30 seconds, there was no network traffic to observe. Run <code>./scripts/gen-traffic.sh 40</code> in another terminal to generate active test traffic.
-</details>
+### Requirements
+- **OS:** Ubuntu Linux 24.04 LTS
+- **Go:** 1.22+
+- **Node.js:** v20+ / npm v10+
+- **Build Tools:** `make`, `gcc`, `g++`, `upx-ucl`, `openssl`, `curl`, `jq`
 
-<details>
-<summary><b>Why is the Filesystem scan marked as "partial"?</b></summary>
-This indicates the scan completed successfully, but encountered a directory with restricted file permissions (such as <code>/restricted_dir</code> in the test corpus). The agent safely logged the permission error, skipped the restricted directory without crashing, and cataloged all other certificates.
-</details>
+```bash
+# Clone repository
+git clone https://github.com/alvin-alvo/sec-discovery-suite.git
+cd sec-discovery-suite
 
-<details>
-<summary><b>Can this suite leak sensitive user data?</b></summary>
-No. The engine is hardcoded to discard Application Data bytes immediately upon reading the TLS record header. It never buffers, logs, or transmits message payloads or private keys.
-</details>
+# 1. Compile Agent (produces UPX-compressed static binary in bin/sds-agent)
+make agent
 
-<details>
-<summary><b>Do I need an internet connection to run this?</b></summary>
-No. The agent, API server, DuckDB database, and React UI are 100% self-contained on your local machine and make zero outbound external internet requests.
-</details>
+# 2. Compile Server (builds React 19 UI and embeds into bin/sds-server)
+make server
+
+# 3. Generate Test Certificate Corpus
+make seed
+
+# 4. Execute Full Test Suite
+make test
+```
+
+### Binary Size Enforcement
+The agent binary size is restricted to &le; 4.5 MB. The build pipeline enforces this constraint:
+```bash
+./scripts/check-size.sh bin/sds-agent 4500000
+# Expected output:
+# bin/sds-agent size: 2435208 bytes (max allowed: 4500000 bytes)
+# PASS: bin/sds-agent (2435208 bytes) is within budget (4500000 bytes)
+```
 
 ---
 
-## 🤖 AI Disclosure
+## REST API Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/runs` | List discovery runs with execution status and summary counts |
+| `POST` | `/api/v1/scan/fs` | Trigger an ad-hoc filesystem certificate scan |
+| `POST` | `/api/v1/scan/tls` | Trigger an ad-hoc passive TLS network scan |
+| `GET` | `/api/v1/runs/{id}` | Retrieve execution details for a specific run |
+| `GET` | `/api/v1/runs/{id}/fs/summary` | Retrieve aggregated filesystem metrics and validity facets |
+| `GET` | `/api/v1/runs/{id}/fs/certificates` | Query discovered certificate records (supports pagination/search) |
+| `GET` | `/api/v1/runs/{id}/tls/summary` | Retrieve aggregated TLS observation metrics |
+| `GET` | `/api/v1/runs/{id}/tls/observations` | Query observed TLS connection flows (`?group=none|endpoint`) |
+| `GET` | `/api/v1/runs/{id}/tls/evidence` | Mathematical audit breakdown of observed TLS record headers |
+| `GET` | `/api/v1/runs/{id}/tls/graph` | Directed relationship graph (`?scope=run|lifetime`) |
+| `GET` | `/api/v1/schedules` | Retrieve current background scan schedules |
+| `PUT` | `/api/v1/schedules/{type}` | Update background scan schedule configuration |
+
+---
+
+## Known Limitations
+
+1. **Transport Boundary:** The sniffer inspects TCP-based TLS traffic. UDP-based protocols (QUIC / HTTP/3) are not parsed by the current TCP reassembly pipeline.
+2. **Encrypted Client Hello (ECH):** In environments utilizing ECH, the Server Name Indication (SNI) outer extension is encrypted, limiting passive domain attribution.
+3. **Container Network Namespaces:** Packet sniffing on host interfaces does not observe traffic confined entirely within isolated container bridge networks without attaching to the target network namespace.
+
+---
+
+## AI Disclosure
 
 In accordance with transparent engineering disclosure:
-- **Google Antigravity** and **Anthropic Claude** were utilized for pair programming, test suite generation, and frontend component scaffolding.
-- All cryptographic parsing logic, packet handling, and DuckDB schemas were verified with deterministic unit and integration test suites.
+- Google Antigravity and Anthropic Claude were utilized for pair programming, test generation, and frontend component scaffolding.
+- All cryptographic parsing, raw packet decoding, and DuckDB schemas were verified with deterministic unit and integration test suites.
 
 ---
 
-## 📄 License
+## License
 
 GNU General Public License v3.0 (GPLv3). See [LICENSE](LICENSE) for details.
