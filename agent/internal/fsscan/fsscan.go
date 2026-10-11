@@ -36,7 +36,7 @@ type CertObservation struct {
 	Path               string                `json:"path"`
 	ResolvedPath       *string               `json:"resolved_path"`
 	Filename           string                `json:"filename"`
-	Format             string                `json:"format"`
+	Format             *string               `json:"format"`
 	ScanRoot           string                `json:"scan_root"`
 	ChainPosition      int                   `json:"chain_position"`
 	ChainLength        int                   `json:"chain_length"`
@@ -58,6 +58,10 @@ type ScanError struct {
 	Code    string  `json:"code"`
 	Message string  `json:"message"`
 	Path    *string `json:"path"`
+}
+
+func strPtr(s string) *string {
+	return &s
 }
 
 // ScanResult holds all observations and errors discovered during the filesystem scan.
@@ -107,7 +111,7 @@ func Scan(roots []string, now time.Time) (*ScanResult, error) {
 				rootObservations = append(rootObservations, &CertObservation{
 					Path:          cleanRoot,
 					Filename:      filepath.Base(cleanRoot),
-					Format:        "UNKNOWN",
+					Format:        nil,
 					ScanRoot:      cleanRoot,
 					ChainPosition: -1,
 					ParseStatus:   "access_denied",
@@ -129,7 +133,7 @@ func Scan(roots []string, now time.Time) (*ScanResult, error) {
 					rootObservations = append(rootObservations, &CertObservation{
 						Path:          path,
 						Filename:      filepath.Base(path),
-						Format:        "UNKNOWN",
+						Format:        nil,
 						ScanRoot:      cleanRoot,
 						ChainPosition: -1,
 						ParseStatus:   "access_denied",
@@ -256,7 +260,7 @@ func inspectFile(path, scanRoot string, now time.Time) ([]*CertObservation, *Sca
 			return []*CertObservation{{
 				Path:          path,
 				Filename:      filepath.Base(path),
-				Format:        "UNKNOWN",
+				Format:        nil,
 				ScanRoot:      scanRoot,
 				ChainPosition: -1,
 				ParseStatus:   "access_denied",
@@ -295,7 +299,7 @@ func inspectFile(path, scanRoot string, now time.Time) ([]*CertObservation, *Sca
 				Path:          path,
 				ResolvedPath:  resolvedPath,
 				Filename:      fileName,
-				Format:        "UNKNOWN",
+				Format:        nil,
 				ScanRoot:      scanRoot,
 				ChainPosition: -1,
 				FileMode:      fileMode,
@@ -311,7 +315,7 @@ func inspectFile(path, scanRoot string, now time.Time) ([]*CertObservation, *Sca
 			Path:          path,
 			ResolvedPath:  resolvedPath,
 			Filename:      fileName,
-			Format:        "UNKNOWN",
+			Format:        nil,
 			ScanRoot:      scanRoot,
 			ChainPosition: -1,
 			FileMode:      fileMode,
@@ -393,7 +397,7 @@ func inspectPEM(path string, resolvedPath *string, fileName, scanRoot, fileMode 
 			Path:               path,
 			ResolvedPath:       resolvedPath,
 			Filename:           fileName,
-			Format:             "PEM",
+			Format:             strPtr("PEM"),
 			ScanRoot:           scanRoot,
 			ChainPosition:      -1,
 			ChainLength:        0,
@@ -419,7 +423,7 @@ func inspectPEM(path string, resolvedPath *string, fileName, scanRoot, fileMode 
 				Path:               path,
 				ResolvedPath:       resolvedPath,
 				Filename:           fileName,
-				Format:             "PEM",
+				Format:             strPtr("PEM"),
 				ScanRoot:           scanRoot,
 				ChainPosition:      i,
 				ChainLength:        chainLen,
@@ -442,7 +446,7 @@ func inspectPEM(path string, resolvedPath *string, fileName, scanRoot, fileMode 
 			Path:               path,
 			ResolvedPath:       resolvedPath,
 			Filename:           fileName,
-			Format:             "PEM",
+			Format:             strPtr("PEM"),
 			ScanRoot:           scanRoot,
 			ChainPosition:      i,
 			ChainLength:        chainLen,
@@ -481,7 +485,7 @@ func inspectPKCS12(path string, resolvedPath *string, fileName, scanRoot, fileMo
 					Path:               path,
 					ResolvedPath:       resolvedPath,
 					Filename:           fileName,
-					Format:             "PKCS12",
+					Format:             strPtr("PKCS12"),
 					ScanRoot:           scanRoot,
 					ChainPosition:      i,
 					ChainLength:        chainLen,
@@ -514,7 +518,7 @@ func inspectPKCS12(path string, resolvedPath *string, fileName, scanRoot, fileMo
 			Path:               path,
 			ResolvedPath:       resolvedPath,
 			Filename:           fileName,
-			Format:             "PKCS12",
+			Format:             strPtr("PKCS12"),
 			ScanRoot:           scanRoot,
 			ChainPosition:      -1,
 			ChainLength:        0,
@@ -541,7 +545,7 @@ func inspectPKCS12(path string, resolvedPath *string, fileName, scanRoot, fileMo
 			Path:               path,
 			ResolvedPath:       resolvedPath,
 			Filename:           fileName,
-			Format:             "PKCS12",
+			Format:             strPtr("PKCS12"),
 			ScanRoot:           scanRoot,
 			ChainPosition:      -1,
 			ChainLength:        0,
@@ -566,7 +570,7 @@ func inspectPKCS12(path string, resolvedPath *string, fileName, scanRoot, fileMo
 			Path:               path,
 			ResolvedPath:       resolvedPath,
 			Filename:           fileName,
-			Format:             "PKCS12",
+			Format:             strPtr("PKCS12"),
 			ScanRoot:           scanRoot,
 			ChainPosition:      i,
 			ChainLength:        chainLen,
@@ -598,7 +602,7 @@ func inspectDER(path string, resolvedPath *string, fileName, scanRoot, fileMode 
 				Path:          path,
 				ResolvedPath:  resolvedPath,
 				Filename:      fileName,
-				Format:        "DER",
+				Format:        strPtr("DER"),
 				ScanRoot:      scanRoot,
 				ChainPosition: -1,
 				ChainLength:   0,
@@ -619,7 +623,7 @@ func inspectDER(path string, resolvedPath *string, fileName, scanRoot, fileMode 
 			Path:          path,
 			ResolvedPath:  resolvedPath,
 			Filename:      fileName,
-			Format:        "DER",
+			Format:        strPtr("DER"),
 			ScanRoot:      scanRoot,
 			ChainPosition: -1,
 			ChainLength:   0,
@@ -643,7 +647,7 @@ func inspectDER(path string, resolvedPath *string, fileName, scanRoot, fileMode 
 			Path:          path,
 			ResolvedPath:  resolvedPath,
 			Filename:      fileName,
-			Format:        "DER",
+			Format:        strPtr("DER"),
 			ScanRoot:      scanRoot,
 			ChainPosition: i,
 			ChainLength:   chainLen,

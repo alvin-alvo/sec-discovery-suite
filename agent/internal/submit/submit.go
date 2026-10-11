@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"sds/agent/internal/fsscan"
+	"sds/agent/internal/tlsscan"
 )
 
 const (
@@ -29,10 +30,10 @@ type HostInfo struct {
 
 // BatchEnvelope represents the batch payload sent from agent to backend.
 type BatchEnvelope struct {
-	Seq     int                       `json:"seq"`
-	Kind    string                    `json:"kind"`
-	Host    HostInfo                  `json:"host"`
-	Records []*fsscan.CertObservation `json:"records"`
+	Seq     int      `json:"seq"`
+	Kind    string   `json:"kind"`
+	Host    HostInfo `json:"host"`
+	Records any      `json:"records"`
 }
 
 // AgentInfo represents agent metadata in /complete.
@@ -147,6 +148,53 @@ func (c *Client) SubmitFSResult(res *fsscan.ScanResult, startedAt, finishedAt ti
 		CaptureMethod: nil,
 		CaptureNote:   nil,
 		Errors:        res.Errors,
+		Logs:          logs,
+	}
+
+	return c.sendCompleteWithRetry(&completePayload)
+}
+
+// SubmitTLSResult sends all TLS observations in chunks of <= 500, then sends /complete.
+func (c *Client) SubmitTLSResult(obs []*tlsscan.TLSObservation, startedAt, finishedAt time.Time, captureMethod string, captureNote *string, scanErrors []*fsscan.ScanError, logs []LogEntry) error {
+	host := GetHostInfo()
+	seq := 1
+	for i := 0; i < len(obs); i += BatchSize {
+		end := i + BatchSize
+		if end > len(obs) {
+			end = len(obs)
+		}
+		chunk := obs[i:end]
+
+		env := BatchEnvelope{
+			Seq:     seq,
+			Kind:    "tls_observations",
+			Host:    host,
+			Records: chunk,
+		}
+
+		if err := c.sendBatchWithRetry(&env); err != nil {
+			return fmt.Errorf("send batch seq %d failed: %w", seq, err)
+		}
+		seq++
+	}
+
+	statusHint := "completed"
+	if len(scanErrors) > 0 {
+		statusHint = "partial"
+	}
+	var cm *string
+	if captureMethod != "" {
+		cm = &captureMethod
+	}
+
+	completePayload := CompletePayload{
+		StatusHint:    statusHint,
+		StartedAt:     startedAt.UTC().Format(time.RFC3339),
+		FinishedAt:    finishedAt.UTC().Format(time.RFC3339),
+		Agent:         AgentInfo{Version: Version, UID: os.Getuid(), Privileged: os.Getuid() == 0},
+		CaptureMethod: cm,
+		CaptureNote:   captureNote,
+		Errors:        scanErrors,
 		Logs:          logs,
 	}
 
