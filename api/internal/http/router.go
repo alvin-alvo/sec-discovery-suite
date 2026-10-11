@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -538,6 +539,33 @@ func NewRouter(cfg ServerConfig) http.Handler {
 	}
 	mux.HandleFunc("POST /api/v1/sample/load", sampleLoadHandler)
 	mux.HandleFunc("POST /api/sample/load", sampleLoadHandler)
+
+	// Traffic Generation endpoint
+	generateTrafficHandler := func(w http.ResponseWriter, r *http.Request) {
+		duration := 30
+		var req struct {
+			DurationSec int `json:"duration_sec"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.DurationSec > 0 {
+				duration = req.DurationSec
+			}
+		}
+
+		go func() {
+			cmd := exec.Command("./scripts/gen-traffic.sh", strconv.Itoa(duration))
+			_ = cmd.Run()
+		}()
+
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status":       "started",
+			"duration_sec": duration,
+			"message":      "Generating simulated TLS 1.2 and TLS 1.3 traffic for observation",
+		})
+	}
+	mux.HandleFunc("POST /api/v1/traffic/generate", generateTrafficHandler)
+	mux.HandleFunc("POST /api/traffic/generate", generateTrafficHandler)
 
 	// Root handler: SPA with index.html fallback for non-/api paths
 	subFS, err := fs.Sub(web.DistFS, "dist")

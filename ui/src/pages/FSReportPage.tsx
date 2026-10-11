@@ -65,21 +65,25 @@ export const FSReportPage: React.FC = () => {
     },
   })
 
-  // 2. Fetch FS Summary
+  const isRunning = run?.status === 'queued' || run?.status === 'running'
+
+  // 2. Fetch FS Summary (polls every 1s when running)
   const { data: summary, isLoading: isSummaryLoading, error: summaryError, refetch: refetchSummary } = useQuery({
     queryKey: ['fs-summary', runId],
     queryFn: () => api.getFSSummary(runId),
     enabled: !!runId,
+    refetchInterval: isRunning ? 1000 : false,
   })
 
-  // 3. Fetch Facets for filters
+  // 3. Fetch Facets for filters (polls every 1s when running)
   const { data: facets } = useQuery({
     queryKey: ['fs-facets', runId],
     queryFn: () => api.getFSFacets(runId),
     enabled: !!runId,
+    refetchInterval: isRunning ? 1000 : false,
   })
 
-  // 4. Fetch Certs list
+  // 4. Fetch Certs list (polls every 1s when running)
   const { data: certsData, isLoading: isCertsLoading, refetch: refetchCerts } = useQuery({
     queryKey: ['fs-certs', runId, search, filterStatus, filterIssuer, filterAlgo, filterFormat, filterParseStatus, page],
     queryFn: () =>
@@ -94,6 +98,7 @@ export const FSReportPage: React.FC = () => {
         offset: page * pageSize,
       }),
     enabled: !!runId,
+    refetchInterval: isRunning ? 1000 : false,
   })
 
   const certs = certsData?.items || []
@@ -140,6 +145,29 @@ export const FSReportPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Live Scan Active Banner */}
+      {run?.status === 'running' && (
+        <div className="p-4 rounded-xl bg-blue-950/40 border border-blue-800/80 flex items-center justify-between gap-4 animate-in fade-in duration-300">
+          <div className="flex items-center gap-3">
+            <span className="relative flex h-3.5 w-3.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-blue-500"></span>
+            </span>
+            <div>
+              <div className="text-sm font-semibold text-blue-300 flex items-center gap-2">
+                Live Filesystem Discovery in Progress
+                <span className="text-[11px] px-2 py-0.5 rounded bg-blue-900/80 text-blue-200 font-mono">
+                  streaming live
+                </span>
+              </div>
+              <div className="text-xs text-slate-400 mt-0.5">
+                Scanning certificate stores and deduplicating fingerprints ({summary?.found || 0} certificates found so far)
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <AsyncState
         isLoading={isRunLoading || isSummaryLoading}

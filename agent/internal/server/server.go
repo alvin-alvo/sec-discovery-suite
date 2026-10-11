@@ -295,6 +295,44 @@ func (s *Server) handleScanTLS(w http.ResponseWriter, r *http.Request) {
 		var observations []*tlsscan.TLSObservation
 		var obsMu sync.Mutex
 
+		client := submit.NewClient(req.CallbackBase, req.RunID, s.Token)
+		streamStop := make(chan struct{})
+		var seqMu sync.Mutex
+		seq := 1
+
+		// Live stream batches to backend every 1000ms while capture is active
+		go func() {
+			ticker := time.NewTicker(1000 * time.Millisecond)
+			defer ticker.Stop()
+			lastSent := 0
+			for {
+				select {
+				case <-streamStop:
+					return
+				case <-ticker.C:
+					obsMu.Lock()
+					curLen := len(observations)
+					if curLen > lastSent {
+						batch := make([]*tlsscan.TLSObservation, curLen-lastSent)
+						copy(batch, observations[lastSent:curLen])
+						lastSent = curLen
+						obsMu.Unlock()
+
+						seqMu.Lock()
+						curSeq := seq
+						seq++
+						seqMu.Unlock()
+
+						if err := client.SendTLSBatch(curSeq, batch); err != nil {
+							s.Logger.Warn("failed to stream live tls batch", "run_id", req.RunID, "seq", curSeq, "err", err)
+						}
+					} else {
+						obsMu.Unlock()
+					}
+				}
+			}
+		}()
+
 		sniffer := tlsscan.NewAFPacketSniffer()
 		err := sniffer.Run(ctx, func(obs *tlsscan.TLSObservation) {
 			obsMu.Lock()
@@ -302,6 +340,7 @@ func (s *Server) handleScanTLS(w http.ResponseWriter, r *http.Request) {
 			obsMu.Unlock()
 		})
 
+		close(streamStop)
 		finishedAt := time.Now()
 
 		var scanErrors []*fsscan.ScanError
@@ -357,9 +396,41 @@ func (s *Server) handleScanTLS(w http.ResponseWriter, r *http.Request) {
 			Msg:   fmt.Sprintf("tls scan completed with %d observations (probed %d)", len(observations), probeCount),
 		})
 
-		client := submit.NewClient(req.CallbackBase, req.RunID, s.Token)
-		if err := client.SubmitTLSResult(observations, startedAt, finishedAt, sniffer.Mode(), nil, scanErrors, logs); err != nil {
-			s.Logger.Error("failed to submit tls scan results", "run_id", req.RunID, "err", err)
+		// Submit all observations including probed certs
+		seqMu.Lock()
+		finalSeq := seq
+		seq++
+		seqMu.Unlock()
+
+		if len(observations) > 0 {
+			if err := client.SendTLSBatch(finalSeq, observations); err != nil {
+				s.Logger.Warn("final tls batch send error", "run_id", req.RunID, "err", err)
+			}
+		}
+
+		statusHint := "completed"
+		if len(scanErrors) > 0 {
+			statusHint = "partial"
+		}
+		var cm *string
+		mode := sniffer.Mode()
+		if mode != "" {
+			cm = &mode
+		}
+
+		completePayload := submit.CompletePayload{
+			StatusHint:    statusHint,
+			StartedAt:     startedAt.UTC().Format(time.RFC3339),
+			FinishedAt:    finishedAt.UTC().Format(time.RFC3339),
+			Agent:         submit.AgentInfo{Version: submit.Version, UID: os.Getuid(), Privileged: os.Getuid() == 0},
+			CaptureMethod: cm,
+			CaptureNote:   nil,
+			Errors:        scanErrors,
+			Logs:          logs,
+		}
+
+		if err := client.SendComplete(&completePayload); err != nil {
+			s.Logger.Error("failed to submit tls complete", "run_id", req.RunID, "err", err)
 		}
 	}()
 }

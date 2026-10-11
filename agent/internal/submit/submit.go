@@ -201,6 +201,35 @@ func (c *Client) SubmitTLSResult(obs []*tlsscan.TLSObservation, startedAt, finis
 	return c.sendCompleteWithRetry(&completePayload)
 }
 
+// SendFSBatch sends a single chunk of cert observations.
+func (c *Client) SendFSBatch(seq int, chunk []*fsscan.CertObservation) error {
+	host := GetHostInfo()
+	env := BatchEnvelope{
+		Seq:     seq,
+		Kind:    "cert_observations",
+		Host:    host,
+		Records: chunk,
+	}
+	return c.sendBatchWithRetry(&env)
+}
+
+// SendTLSBatch sends a single chunk of TLS observations.
+func (c *Client) SendTLSBatch(seq int, chunk []*tlsscan.TLSObservation) error {
+	host := GetHostInfo()
+	env := BatchEnvelope{
+		Seq:     seq,
+		Kind:    "tls_observations",
+		Host:    host,
+		Records: chunk,
+	}
+	return c.sendBatchWithRetry(&env)
+}
+
+// SendComplete sends the final complete payload.
+func (c *Client) SendComplete(payload *CompletePayload) error {
+	return c.sendCompleteWithRetry(payload)
+}
+
 func (c *Client) sendBatchWithRetry(env *BatchEnvelope) error {
 	url := fmt.Sprintf("%s/api/v1/ingest/runs/%s/batches", c.CallbackBase, c.RunID)
 	data, err := json.Marshal(env)

@@ -817,6 +817,17 @@ ON CONFLICT (run_id, conn_key) DO NOTHING;`)
 			return fmt.Errorf("failed to record ingest batch: %w", err)
 		}
 
+		// 7. Update live run progress counters in discovery_runs
+		if env.Kind == "cert_observations" {
+			var total, unique int
+			_ = tx.QueryRowContext(ctx, "SELECT count(*), count(distinct fingerprint_sha256) FROM cert_observations WHERE run_id = ?", runID).Scan(&total, &unique)
+			_, _ = tx.ExecContext(ctx, "UPDATE discovery_runs SET records_total = ?, records_unique = ? WHERE run_id = ?", total, unique, runID)
+		} else if env.Kind == "tls_observations" {
+			var total, unique int
+			_ = tx.QueryRowContext(ctx, "SELECT count(*), count(distinct conn_key) FROM tls_observations WHERE run_id = ?", runID).Scan(&total, &unique)
+			_, _ = tx.ExecContext(ctx, "UPDATE discovery_runs SET records_total = ?, records_unique = ? WHERE run_id = ?", total, unique, runID)
+		}
+
 		return nil
 	})
 

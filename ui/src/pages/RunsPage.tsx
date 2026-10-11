@@ -73,9 +73,8 @@ export const RunsPage: React.FC = () => {
         : null
       const res = await api.createRun('filesystem', roots ? { roots } : undefined)
       await queryClient.invalidateQueries({ queryKey: ['runs'] })
-      refetch()
       if (res.run_id) {
-        // Option to navigate or stay
+        navigate(`/runs/${res.run_id}/fs`)
       }
     } catch (e: any) {
       alert('Failed to start filesystem scan: ' + e.message)
@@ -87,9 +86,14 @@ export const RunsPage: React.FC = () => {
   const handleStartTLS = async () => {
     try {
       setIsStartingTLS(true)
-      await api.createRun('tls', { duration_sec: Number(durationInput) || 30 })
+      const dur = Number(durationInput) || 30
+      // Automatically send live TLS traffic so connections appear immediately
+      api.generateTraffic(dur + 5).catch(() => {})
+      const res = await api.createRun('tls', { duration_sec: dur })
       await queryClient.invalidateQueries({ queryKey: ['runs'] })
-      refetch()
+      if (res.run_id) {
+        navigate(`/runs/${res.run_id}/tls`)
+      }
     } catch (e: any) {
       alert('Failed to start TLS scan: ' + e.message)
     } finally {

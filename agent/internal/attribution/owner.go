@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Owner represents the owner object in docs/06.
@@ -16,40 +17,27 @@ type Owner struct {
 	Confidence string  `json:"confidence"` // high | medium | low
 }
 
-// FindFileOwner attempts best-effort owner discovery for a file path per docs/02.
-// Confidence levels:
-// - high: process holds file open (/proc/*/fd)
-// - medium: path appears in process cmdline (/proc/*/cmdline)
-// - low: path under known service config dir (e.g. /etc/nginx)
-func FindFileOwner(targetPath string) *Owner {
-	cleanTarget := filepath.Clean(targetPath)
-	realTarget, err := filepath.EvalSymlinks(cleanTarget)
-	if err != nil {
-		realTarget = cleanTarget
-	}
-
-	// 1. High confidence: /proc/*/fd
-	if owner := findOpenFDOwner(cleanTarget, realTarget); owner != nil {
-		return owner
-	}
-
-	// 2. Medium confidence: /proc/*/cmdline
-	if owner := findCmdlineOwner(cleanTarget, realTarget); owner != nil {
-		return owner
-	}
-
-	// 3. Low confidence: known service directories
-	if owner := findKnownServiceOwner(cleanTarget); owner != nil {
-		return owner
-	}
-
-	return nil
+// Resolver performs efficient single-pass procfs inspection to attribute files.
+type Resolver struct {
+	mu        sync.RWMutex
+	openFiles map[string]*Owner
+	cmdlines  map[string]*Owner
 }
 
-func findOpenFDOwner(cleanTarget, realTarget string) *Owner {
+// NewResolver scans /proc once and indexes open FDs and cmdlines.
+func NewResolver() *Resolver {
+	r := &Resolver{
+		openFiles: make(map[string]*Owner),
+		cmdlines:  make(map[string]*Owner),
+	}
+	r.refresh()
+	return r
+}
+
+func (r *Resolver) refresh() {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		return nil
+		return
 	}
 
 	for _, entry := range entries {
@@ -61,21 +49,23 @@ func findOpenFDOwner(cleanTarget, realTarget string) *Owner {
 			continue
 		}
 
+		var procName *string
+		var unitName *string
+
+		// 1. Index open file descriptors
 		fdDir := filepath.Join("/proc", entry.Name(), "fd")
 		fds, err := os.ReadDir(fdDir)
-		if err != nil {
-			continue
-		}
-
-		for _, fd := range fds {
-			link, err := os.Readlink(filepath.Join(fdDir, fd.Name()))
-			if err != nil {
-				continue
-			}
-			if link == cleanTarget || link == realTarget {
-				procName := getProcessExe(pid)
-				unitName := getProcessUnit(pid)
-				return &Owner{
+		if err == nil {
+			for _, fd := range fds {
+				link, err := os.Readlink(filepath.Join(fdDir, fd.Name()))
+				if err != nil || link == "" {
+					continue
+				}
+				if procName == nil {
+					procName = getProcessExe(pid)
+					unitName = getProcessUnit(pid)
+				}
+				r.openFiles[link] = &Owner{
 					PID:        &pid,
 					Proc:       procName,
 					Unit:       unitName,
@@ -83,35 +73,16 @@ func findOpenFDOwner(cleanTarget, realTarget string) *Owner {
 				}
 			}
 		}
-	}
-	return nil
-}
 
-func findCmdlineOwner(cleanTarget, realTarget string) *Owner {
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return nil
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			continue
-		}
-
+		// 2. Index cmdline
 		cmdData, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
-		if err != nil || len(cmdData) == 0 {
-			continue
-		}
-
-		cmdStr := string(cmdData)
-		if strings.Contains(cmdStr, cleanTarget) || strings.Contains(cmdStr, realTarget) {
-			procName := getProcessExe(pid)
-			unitName := getProcessUnit(pid)
-			return &Owner{
+		if err == nil && len(cmdData) > 0 {
+			cmdStr := string(cmdData)
+			if procName == nil {
+				procName = getProcessExe(pid)
+				unitName = getProcessUnit(pid)
+			}
+			r.cmdlines[cmdStr] = &Owner{
 				PID:        &pid,
 				Proc:       procName,
 				Unit:       unitName,
@@ -119,7 +90,41 @@ func findCmdlineOwner(cleanTarget, realTarget string) *Owner {
 			}
 		}
 	}
-	return nil
+}
+
+// FindFileOwner attempts best-effort owner discovery for a file path.
+func (r *Resolver) FindFileOwner(targetPath string) *Owner {
+	cleanTarget := filepath.Clean(targetPath)
+	realTarget, err := filepath.EvalSymlinks(cleanTarget)
+	if err != nil {
+		realTarget = cleanTarget
+	}
+
+	// 1. High confidence: /proc/*/fd
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if owner, ok := r.openFiles[cleanTarget]; ok {
+		return owner
+	}
+	if owner, ok := r.openFiles[realTarget]; ok {
+		return owner
+	}
+
+	// 2. Medium confidence: /proc/*/cmdline
+	for cmdStr, owner := range r.cmdlines {
+		if strings.Contains(cmdStr, cleanTarget) || strings.Contains(cmdStr, realTarget) {
+			return owner
+		}
+	}
+
+	// 3. Low confidence: known service directories
+	return findKnownServiceOwner(cleanTarget)
+}
+
+// FindFileOwner standalone helper.
+func FindFileOwner(targetPath string) *Owner {
+	return NewResolver().FindFileOwner(targetPath)
 }
 
 func findKnownServiceOwner(path string) *Owner {
@@ -179,7 +184,6 @@ func getProcessUnit(pid int) *string {
 
 	lines := bytes.Split(cgroup, []byte("\n"))
 	for _, line := range lines {
-		// e.g. 0::/system.slice/nginx.service
 		s := string(line)
 		parts := strings.Split(s, "/")
 		for _, part := range parts {

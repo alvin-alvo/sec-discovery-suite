@@ -155,6 +155,15 @@ func Scan(roots []string, now time.Time) (*ScanResult, error) {
 				return nil
 			}
 
+			// Fast skip: non-certificate extensions
+			ext := strings.ToLower(filepath.Ext(path))
+			switch ext {
+			case ".js", ".ts", ".css", ".map", ".json", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+				".wasm", ".node", ".pak", ".bin", ".dat", ".v8", ".zip", ".tar", ".gz", ".py", ".c",
+				".h", ".cpp", ".o", ".a", ".so", ".md", ".lock", ".toml", ".yaml", ".yml", ".html":
+				return nil
+			}
+
 			jobs = append(jobs, fileJob{
 				path:     path,
 				scanRoot: cleanRoot,
@@ -171,6 +180,8 @@ func Scan(roots []string, now time.Time) (*ScanResult, error) {
 			})
 		}
 	}
+
+	resolver := attribution.NewResolver()
 
 	// Worker pool for concurrent file inspection
 	numWorkers := 8
@@ -198,7 +209,7 @@ func Scan(roots []string, now time.Time) (*ScanResult, error) {
 		go func() {
 			defer wg.Done()
 			for job := range jobsCh {
-				obs, scanErr := inspectFile(job.path, job.scanRoot, now)
+				obs, scanErr := inspectFile(job.path, job.scanRoot, now, resolver)
 				resultsCh <- struct {
 					obs []*CertObservation
 					err *ScanError
@@ -252,7 +263,7 @@ func Scan(roots []string, now time.Time) (*ScanResult, error) {
 	}, nil
 }
 
-func inspectFile(path, scanRoot string, now time.Time) ([]*CertObservation, *ScanError) {
+func inspectFile(path, scanRoot string, now time.Time, resolver *attribution.Resolver) ([]*CertObservation, *ScanError) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsPermission(err) {
@@ -329,7 +340,7 @@ func inspectFile(path, scanRoot string, now time.Time) ([]*CertObservation, *Sca
 
 	// Sniff format
 	isPEM := bytes.Contains(data, []byte("-----BEGIN "))
-	isDER := len(data) >= 2 && data[0] == 0x30 && (data[1] == 0x82 || (data[1]&0x80 == 0))
+	isDER := len(data) >= 2 && data[0] == 0x30 && data[1] == 0x82
 	isPKCS12 := ext == ".p12" || ext == ".pfx"
 
 	isCertExt := ext == ".pem" || ext == ".crt" || ext == ".cer" || ext == ".der" || isPKCS12
@@ -339,7 +350,12 @@ func inspectFile(path, scanRoot string, now time.Time) ([]*CertObservation, *Sca
 		return nil, nil
 	}
 
-	owner := attribution.FindFileOwner(path)
+	var owner *attribution.Owner
+	if resolver != nil {
+		owner = resolver.FindFileOwner(path)
+	} else {
+		owner = attribution.FindFileOwner(path)
+	}
 	discoveredAt := now.UTC().Format(time.RFC3339)
 
 	// Case 1: PKCS12 / PFX

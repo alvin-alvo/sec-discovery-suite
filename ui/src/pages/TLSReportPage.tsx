@@ -25,6 +25,8 @@ import {
   Cpu,
   Layers,
   Info,
+  Play,
+  Zap,
 } from 'lucide-react'
 import {
   ResponsiveContainer,
@@ -47,6 +49,7 @@ export const TLSReportPage: React.FC = () => {
 
   const [expandedEndpoints, setExpandedEndpoints] = useState<Record<string, boolean>>({})
   const [showEvidence, setShowEvidence] = useState(false)
+  const [isGeneratingTraffic, setIsGeneratingTraffic] = useState(false)
 
   // 1. Fetch Run details
   const { data: run, isLoading: isRunLoading } = useQuery({
@@ -58,7 +61,9 @@ export const TLSReportPage: React.FC = () => {
     },
   })
 
-  // 2. Fetch TLS Summary
+  const isRunning = run?.status === 'queued' || run?.status === 'running'
+
+  // 2. Fetch TLS Summary (polls every 1s when running)
   const {
     data: summary,
     isLoading: isSummaryLoading,
@@ -68,42 +73,58 @@ export const TLSReportPage: React.FC = () => {
     queryKey: ['tls-summary', runId],
     queryFn: () => api.getTLSSummary(runId),
     enabled: !!runId,
+    refetchInterval: isRunning ? 1000 : false,
   })
 
-  // 3. Fetch Grouped observations
+  // 3. Fetch Grouped observations (polls every 1s when running)
   const { data: groupedData, isLoading: isGroupedLoading } = useQuery({
     queryKey: ['tls-grouped', runId],
     queryFn: () => api.getTLSObservationsGrouped(runId),
     enabled: !!runId,
+    refetchInterval: isRunning ? 1000 : false,
   })
   const endpointGroups = groupedData?.items || []
 
-  // 4. Fetch Flat observations (for detail drawer / expansion)
+  // 4. Fetch Flat observations (polls every 1s when running)
   const { data: flatData } = useQuery({
     queryKey: ['tls-flat', runId],
     queryFn: () => api.getTLSObservationsNone(runId, { limit: 200 }),
     enabled: !!runId,
+    refetchInterval: isRunning ? 1000 : false,
   })
   const flatObservations = flatData?.items || []
 
-  // 5. Fetch Evidence
+  // 5. Fetch Evidence (polls every 1s when running)
   const { data: evidence } = useQuery({
     queryKey: ['tls-evidence', runId],
     queryFn: () => api.getTLSEvidence(runId),
     enabled: !!runId,
+    refetchInterval: isRunning ? 1000 : false,
   })
 
-  // 6. Fetch Graphs
+  // 6. Fetch Graphs (polls every 1.5s when running)
   const { data: runGraph, isLoading: isRunGraphLoading } = useQuery({
     queryKey: ['run-graph', runId],
     queryFn: () => api.getRunGraph(runId),
     enabled: !!runId,
+    refetchInterval: isRunning ? 1500 : false,
   })
 
   const { data: globalGraph } = useQuery({
     queryKey: ['global-graph'],
     queryFn: () => api.getGlobalGraph(),
   })
+
+  const handleGenerateTraffic = async () => {
+    try {
+      setIsGeneratingTraffic(true)
+      await api.generateTraffic(30)
+    } catch (e: any) {
+      alert('Traffic generator failed: ' + e.message)
+    } finally {
+      setTimeout(() => setIsGeneratingTraffic(false), 2500)
+    }
+  }
 
   const toggleEndpoint = (key: string) => {
     setExpandedEndpoints((prev) => ({ ...prev, [key]: !prev[key] }))
@@ -148,6 +169,69 @@ export const TLSReportPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Live Stream Active Banner */}
+      {run?.status === 'running' && (
+        <div className="p-4 rounded-xl bg-cyan-950/40 border border-cyan-800/80 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in duration-300">
+          <div className="flex items-center gap-3">
+            <span className="relative flex h-3.5 w-3.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-cyan-500"></span>
+            </span>
+            <div>
+              <div className="text-sm font-semibold text-cyan-300 flex items-center gap-2">
+                Live TLS Metadata Stream Active
+                <span className="text-[11px] px-2 py-0.5 rounded bg-cyan-900/80 text-cyan-200 font-mono">
+                  streaming every 1s
+                </span>
+              </div>
+              <div className="text-xs text-slate-400 mt-0.5">
+                Passively sniffing TLS 1.2/1.3 handshakes across network interfaces
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleGenerateTraffic}
+              disabled={isGeneratingTraffic}
+              className="px-3.5 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-lg shadow-cyan-900/30 disabled:opacity-50"
+            >
+              <Activity className="w-3.5 h-3.5 animate-pulse" />
+              {isGeneratingTraffic ? 'Sending Test Packets...' : 'Generate Live TLS Traffic'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 0 Events Explainer Banner */}
+      {run?.status === 'completed' && summary?.events === 0 && (
+        <div className="p-5 rounded-xl bg-amber-950/30 border border-amber-800/60 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in duration-300">
+          <div className="flex items-center gap-3">
+            <Info className="w-5 h-5 text-amber-400 flex-shrink-0" />
+            <div>
+              <div className="text-sm font-semibold text-amber-300">
+                0 TLS Connections Observed During Scan Window
+              </div>
+              <div className="text-xs text-slate-400 mt-0.5">
+                Passive capture requires active encrypted traffic while scanning. Click below to fire test traffic and observe live connections immediately.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              await api.generateTraffic(35)
+              const res = await api.createRun('tls', { duration_sec: 30 })
+              if (res.run_id) {
+                window.location.href = `/runs/${res.run_id}/tls`
+              }
+            }}
+            className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs flex items-center gap-2 transition whitespace-nowrap shadow-lg shadow-amber-950/40"
+          >
+            <Play className="w-4 h-4 fill-current" />
+            Run New Scan With Live Traffic
+          </button>
+        </div>
+      )}
 
       <AsyncState
         isLoading={isRunLoading || isSummaryLoading}

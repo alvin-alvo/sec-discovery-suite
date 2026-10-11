@@ -144,4 +144,11 @@ export const api = {
 
   getGlobalGraph: () =>
     fetchJSON<GraphData>('/api/v1/graph?scope=global'),
+
+  generateTraffic: (durationSec = 30) =>
+    fetchJSON<{ status: string; duration_sec: number; message: string }>('/api/v1/traffic/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ duration_sec: durationSec }),
+    }),
 }
