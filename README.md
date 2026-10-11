@@ -28,24 +28,21 @@ The suite provides complete cryptographic visibility into local Linux environmen
 - Ubuntu Linux (tested on 24.04 LTS)
 - Pre-built binaries in `bin/` (`bin/sds-agent` and `bin/sds-server`)
 
-### 1. Set Authentication Token
-```bash
-export SDS_TOKEN=$(openssl rand -hex 16)
-```
-
-### 2. Start the Agent (Terminal 1)
+### 1. Start the Agent (Terminal 1)
 The agent requires elevated network capture capabilities (`CAP_NET_RAW`, `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH`):
 ```bash
-sudo SDS_TOKEN=$SDS_TOKEN ./bin/sds-agent serve
+sudo ./bin/sds-agent serve
 ```
 *Expected output: `sds-agent serving on 127.0.0.1:7471`*
 
-### 3. Start the Server and Dashboard (Terminal 2)
+### 2. Start the Server and Dashboard (Terminal 2)
 The backend server manages DuckDB storage, scheduled dispatching, and serves the embedded UI:
 ```bash
-SDS_TOKEN=$SDS_TOKEN SDS_AGENT_ADDR=http://127.0.0.1:7471 SDS_DB=data/sds.duckdb ./bin/sds-server
+./bin/sds-server
 ```
 *Expected output: `sds-server listening on http://127.0.0.1:8080`*
+
+*(Note: The agent and server automatically generate and synchronize a secure bearer token via local `.sds_token`. You can optionally supply an explicit token in both terminals using `export SDS_TOKEN=<token>`.)*
 
 ### 4. Access the Dashboard
 Open your browser and navigate to:
