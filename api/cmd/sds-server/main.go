@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -31,10 +33,23 @@ func main() {
 	dbPath := getEnv("SDS_DB", "data/sds.duckdb")
 	agentAddr := getEnv("SDS_AGENT_ADDR", "http://127.0.0.1:7471")
 	token := os.Getenv("SDS_TOKEN")
+	if token == "" {
+		var b [16]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			slog.Error("Failed to generate random token", "err", err)
+			os.Exit(1)
+		}
+		token = hex.EncodeToString(b[:])
+		slog.Info("SDS_TOKEN unset; generated random token for session", "token", token)
+	}
+
 	callbackBase := getEnv("SDS_CALLBACK_BASE", "http://127.0.0.1:8080")
-	bindAddr := getEnv("SDS_BIND_ADDR", ":8080")
-	if port := os.Getenv("PORT"); port != "" && bindAddr == ":8080" {
-		bindAddr = ":" + port
+	bindAddr := getEnv("SDS_API_ADDR", "")
+	if bindAddr == "" {
+		bindAddr = getEnv("SDS_BIND_ADDR", "127.0.0.1:8080")
+	}
+	if port := os.Getenv("PORT"); port != "" && (bindAddr == "127.0.0.1:8080" || bindAddr == ":8080") {
+		bindAddr = "127.0.0.1:" + port
 	}
 
 	slog.Info("Starting sec-discovery-suite backend",

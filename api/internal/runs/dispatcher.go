@@ -132,6 +132,8 @@ func (d *Dispatcher) dispatch(runID, runType string, params json.RawMessage) {
 		}
 		if p.DurationSec <= 0 {
 			p.DurationSec = 30
+		} else if p.DurationSec > 120 {
+			p.DurationSec = 120
 		}
 		cmd := AgentTLSCommand{
 			RunID:        runID,

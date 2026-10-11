@@ -168,3 +168,111 @@ type DashboardSummary struct {
 	ActiveRuns    int64 `json:"active_runs"`
 	ExpiringCerts int64 `json:"expiring_certs"`
 }
+
+type TimelineBucket struct {
+	TS     string `json:"ts"`
+	Events int64  `json:"events"`
+}
+
+type TLSSummary struct {
+	Events          int64            `json:"events"`
+	Connections     int64            `json:"connections"`
+	UniqueEndpoints int64            `json:"unique_endpoints"`
+	UniquePorts     int64            `json:"unique_ports"`
+	CertsObserved   int64            `json:"certs_observed"`
+	Relationships   int64            `json:"relationships"`
+	Versions        []NamedCount     `json:"versions"`
+	Ciphers         []NamedCount     `json:"ciphers"`
+	KexGroups       []NamedCount     `json:"kex_groups"`
+	Directions      []NamedCount     `json:"directions"`
+	PeerCertSources []NamedCount     `json:"peer_cert_sources"`
+	Attribution     []NamedCount     `json:"attribution"`
+	TopEndpoints    []NamedCount     `json:"top_endpoints"`
+	CertPosture     []NamedCount     `json:"cert_posture"`
+	Timeline        []TimelineBucket `json:"timeline"`
+}
+
+type TLSObservationItem struct {
+	ObsID          int64      `json:"obs_id"`
+	RunID          string     `json:"run_id"`
+	ConnKey        string     `json:"conn_key"`
+	FirstTS        *time.Time `json:"first_ts"`
+	LastTS         *time.Time `json:"last_ts"`
+	Direction      *string    `json:"direction"`
+	Transport      *string    `json:"transport"`
+	LocalIP        *string    `json:"local_ip"`
+	LocalPort      int        `json:"local_port"`
+	RemoteIP       *string    `json:"remote_ip"`
+	RemotePort     int        `json:"remote_port"`
+	SNI            *string    `json:"sni"`
+	TLSVersion     *string    `json:"tls_version"`
+	CipherSuite    *string    `json:"cipher_suite"`
+	KexGroup       *string    `json:"kex_group"`
+	PQCClass       *string    `json:"pqc_class"`
+	Outcome        *string    `json:"outcome"`
+	PeerCertFP     *string    `json:"peer_cert_fp"`
+	PeerCertSource *string    `json:"peer_cert_source"`
+	PID            *int       `json:"pid"`
+	Exe            *string    `json:"exe"`
+	Comm           *string    `json:"comm"`
+	Unit           *string    `json:"unit"`
+	Attribution    *string    `json:"attribution"`
+	RecordCount    int        `json:"record_count"`
+	HandshakeCount int        `json:"handshake_count"`
+	AppdataCount   int        `json:"appdata_count"`
+	AlertCount     int        `json:"alert_count"`
+	HandshakeSeq   *string    `json:"handshake_seq"`
+	PeerSubjectCN  *string    `json:"peer_subject_cn,omitempty"`
+	PeerIssuerCN   *string    `json:"peer_issuer_cn,omitempty"`
+	PeerNotAfter   *time.Time `json:"peer_not_after,omitempty"`
+	PeerPubkeyAlgo *string    `json:"peer_pubkey_algo,omitempty"`
+	PeerPubkeyBits *int       `json:"peer_pubkey_bits,omitempty"`
+	PeerValidity   *string    `json:"peer_validity,omitempty"`
+}
+
+type TLSEndpointGroupItem struct {
+	RemoteIP    string   `json:"remote_ip"`
+	RemotePort  int      `json:"remote_port"`
+	SNI         *string  `json:"sni"`
+	Connections int64    `json:"connections"`
+	Events      int64    `json:"events"`
+	Versions    []string `json:"versions"`
+	Ciphers     []string `json:"ciphers"`
+	Processes   []string `json:"processes"`
+	Directions  []string `json:"directions"`
+}
+
+type TLSConnRecordCount struct {
+	ConnKey     string  `json:"conn_key"`
+	Remote      string  `json:"remote"`
+	SNI         *string `json:"sni"`
+	RecordCount int64   `json:"record_count"`
+}
+
+type TLSCertObsItem struct {
+	FingerprintSHA256 string `json:"fingerprint_sha256"`
+	Source            string `json:"source"`
+}
+
+type TLSEvidence struct {
+	Events struct {
+		Total     int64 `json:"total"`
+		Formula   string `json:"formula"`
+		Breakdown struct {
+			Handshake int64 `json:"handshake"`
+			Appdata   int64 `json:"appdata"`
+			Alert     int64 `json:"alert"`
+			Other     int64 `json:"other"`
+		} `json:"breakdown"`
+		ByConnection []TLSConnRecordCount `json:"by_connection"`
+	} `json:"events"`
+	UniqueEndpoints struct {
+		Total   int64    `json:"total"`
+		Formula string   `json:"formula"`
+		Items   []string `json:"items"`
+	} `json:"unique_endpoints"`
+	CertsObserved struct {
+		Total int64            `json:"total"`
+		Items []TLSCertObsItem `json:"items"`
+	} `json:"certs_observed"`
+}

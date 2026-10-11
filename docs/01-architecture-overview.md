@@ -71,8 +71,8 @@ sec-discovery-suite/
 | sds-server (API + UI) | `:8080` | Run unprivileged |
 | sds-agent (serve mode) | `127.0.0.1:7471` | Needs capabilities (below) |
 
-Env vars: `SDS_TOKEN` (shared bearer token), `SDS_AGENT_ADDR` (default `127.0.0.1:7471`),
-`SDS_API_ADDR` (default `:8080`), `SDS_DB` (default `data/sds.duckdb`).
+Env vars: `SDS_TOKEN` (shared bearer token), `SDS_AGENT_ADDR` (default `http://127.0.0.1:7471`),
+`SDS_API_ADDR` (default `127.0.0.1:8080`), `SDS_DB` (default `data/sds.duckdb`).
 
 ## Run lifecycle
 `queued -> running -> completed | partial | failed`

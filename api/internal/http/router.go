@@ -1,6 +1,7 @@
 package http
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -51,7 +52,7 @@ func NewRouter(cfg ServerConfig) http.Handler {
 		}
 		auth := r.Header.Get("Authorization")
 		expected := "Bearer " + cfg.Token
-		return auth == expected
+		return subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) == 1
 	}
 
 	// 1. Health
@@ -457,16 +458,76 @@ func NewRouter(cfg ServerConfig) http.Handler {
 	mux.HandleFunc("POST /api/v1/ingest/runs/{id}/complete", ingestCompleteHandler)
 	mux.HandleFunc("POST /api/ingest/runs/{id}/complete", ingestCompleteHandler)
 
-	// TLS Report endpoints (501 not implemented for now per instructions)
-	tls501Handler := func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "TLS report endpoint not implemented yet")
+	// TLS Report endpoints per docs/07
+	getTLSSummaryHandler := func(w http.ResponseWriter, r *http.Request) {
+		runID := r.PathValue("id")
+		summary, err := cfg.Store.GetTLSSummary(r.Context(), runID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, summary)
 	}
-	mux.HandleFunc("GET /api/v1/runs/{id}/tls/summary", tls501Handler)
-	mux.HandleFunc("GET /api/runs/{id}/tls/summary", tls501Handler)
-	mux.HandleFunc("GET /api/v1/runs/{id}/tls/observations", tls501Handler)
-	mux.HandleFunc("GET /api/runs/{id}/tls/observations", tls501Handler)
-	mux.HandleFunc("GET /api/v1/runs/{id}/tls/evidence", tls501Handler)
-	mux.HandleFunc("GET /api/runs/{id}/tls/evidence", tls501Handler)
+	mux.HandleFunc("GET /api/v1/runs/{id}/tls/summary", getTLSSummaryHandler)
+	mux.HandleFunc("GET /api/runs/{id}/tls/summary", getTLSSummaryHandler)
+
+	getTLSObservationsHandler := func(w http.ResponseWriter, r *http.Request) {
+		runID := r.PathValue("id")
+		q := r.URL.Query()
+		group := q.Get("group")
+		queryStr := q.Get("q")
+		version := q.Get("version")
+		cipher := q.Get("cipher")
+		direction := q.Get("direction")
+		attribution := q.Get("attribution")
+		limit := 50
+		if lStr := q.Get("limit"); lStr != "" {
+			if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
+				limit = l
+			}
+		}
+		offset := 0
+		if oStr := q.Get("offset"); oStr != "" {
+			if o, err := strconv.Atoi(oStr); err == nil && o >= 0 {
+				offset = o
+			}
+		}
+
+		items, total, err := cfg.Store.ListTLSObservations(r.Context(), runID, group, queryStr, version, cipher, direction, attribution, limit, offset)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+			return
+		}
+
+		if group == "endpoint" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"items": items,
+				"total": total,
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"items":  items,
+			"total":  total,
+			"limit":  limit,
+			"offset": offset,
+		})
+	}
+	mux.HandleFunc("GET /api/v1/runs/{id}/tls/observations", getTLSObservationsHandler)
+	mux.HandleFunc("GET /api/runs/{id}/tls/observations", getTLSObservationsHandler)
+
+	getTLSEvidenceHandler := func(w http.ResponseWriter, r *http.Request) {
+		runID := r.PathValue("id")
+		evidence, err := cfg.Store.GetTLSEvidence(r.Context(), runID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, evidence)
+	}
+	mux.HandleFunc("GET /api/v1/runs/{id}/tls/evidence", getTLSEvidenceHandler)
+	mux.HandleFunc("GET /api/runs/{id}/tls/evidence", getTLSEvidenceHandler)
 
 	// Sample data endpoint
 	sampleLoadHandler := func(w http.ResponseWriter, r *http.Request) {

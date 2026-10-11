@@ -911,3 +911,336 @@ func scanRun(s rowScanner) (*Run, error) {
 	r.Params, _ = scanJSON(paramsVal)
 	return &r, nil
 }
+
+// GetTLSSummary computes summary statistics for a TLS run per docs/07.
+func (s *Store) GetTLSSummary(ctx context.Context, runID string) (*TLSSummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	summary := &TLSSummary{
+		Versions:        []NamedCount{},
+		Ciphers:         []NamedCount{},
+		KexGroups:       []NamedCount{},
+		Directions:      []NamedCount{},
+		PeerCertSources: []NamedCount{},
+		Attribution:     []NamedCount{},
+		TopEndpoints:    []NamedCount{},
+		CertPosture:     []NamedCount{},
+		Timeline:        []TimelineBucket{},
+	}
+
+	// 1. Basic counts
+	row := s.db.QueryRowContext(ctx, `
+SELECT
+	COALESCE(SUM(record_count), 0),
+	COUNT(*),
+	COALESCE(COUNT(DISTINCT (remote_ip || ':' || CAST(remote_port AS TEXT))), 0),
+	COALESCE(COUNT(DISTINCT remote_port), 0),
+	COALESCE(COUNT(DISTINCT peer_cert_fp), 0)
+FROM tls_observations WHERE run_id = ?;`, runID)
+	if err := row.Scan(&summary.Events, &summary.Connections, &summary.UniqueEndpoints, &summary.UniquePorts, &summary.CertsObserved); err != nil {
+		return nil, fmt.Errorf("failed to query tls basic counts: %w", err)
+	}
+
+	// Relationships from edge_run_stats
+	_ = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM edge_run_stats WHERE run_id = ?;", runID).Scan(&summary.Relationships)
+
+	// Helper to load NamedCount lists
+	loadNamedCounts := func(query string, target *[]NamedCount) {
+		rows, err := s.db.QueryContext(ctx, query, runID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var nc NamedCount
+				if err := rows.Scan(&nc.Name, &nc.Count); err == nil {
+					*target = append(*target, nc)
+				}
+			}
+		}
+	}
+
+	loadNamedCounts("SELECT COALESCE(tls_version, 'unknown'), COUNT(*) FROM tls_observations WHERE run_id = ? GROUP BY 1 ORDER BY 2 DESC;", &summary.Versions)
+	loadNamedCounts("SELECT COALESCE(cipher_suite, 'unknown'), COUNT(*) FROM tls_observations WHERE run_id = ? GROUP BY 1 ORDER BY 2 DESC;", &summary.Ciphers)
+	loadNamedCounts("SELECT COALESCE(kex_group, 'unknown'), COUNT(*) FROM tls_observations WHERE run_id = ? GROUP BY 1 ORDER BY 2 DESC;", &summary.KexGroups)
+	loadNamedCounts("SELECT COALESCE(direction, 'unknown'), COUNT(*) FROM tls_observations WHERE run_id = ? GROUP BY 1 ORDER BY 2 DESC;", &summary.Directions)
+	loadNamedCounts("SELECT COALESCE(peer_cert_source, 'unavailable'), COUNT(*) FROM tls_observations WHERE run_id = ? GROUP BY 1 ORDER BY 2 DESC;", &summary.PeerCertSources)
+	loadNamedCounts("SELECT COALESCE(attribution, 'unavailable'), COUNT(*) FROM tls_observations WHERE run_id = ? GROUP BY 1 ORDER BY 2 DESC;", &summary.Attribution)
+
+	// Top endpoints
+	loadNamedCounts(`
+SELECT
+	CASE
+		WHEN sni IS NOT NULL AND sni != '' THEN sni || ' (' || remote_ip || ':' || CAST(remote_port AS TEXT) || ')'
+		ELSE remote_ip || ':' || CAST(remote_port AS TEXT)
+	END,
+	COUNT(*)
+FROM tls_observations WHERE run_id = ? GROUP BY 1 ORDER BY 2 DESC LIMIT 10;`, &summary.TopEndpoints)
+
+	// Cert posture evaluated at query time against now()
+	loadNamedCounts(`
+SELECT
+	CASE
+		WHEN o.peer_cert_fp IS NULL THEN 'unknown'
+		WHEN c.not_after < CURRENT_TIMESTAMP THEN 'expired'
+		WHEN c.not_after <= CURRENT_TIMESTAMP + INTERVAL '30 days' THEN 'expiring'
+		ELSE 'valid'
+	END,
+	COUNT(*)
+FROM tls_observations o
+LEFT JOIN certificates c ON o.peer_cert_fp = c.fingerprint_sha256
+WHERE o.run_id = ?
+GROUP BY 1 ORDER BY 2 DESC;`, &summary.CertPosture)
+
+	// Timeline in 5-second buckets of first_ts
+	timelineRows, err := s.db.QueryContext(ctx, `
+SELECT
+	strftime(time_bucket(INTERVAL '5 seconds', first_ts), '%Y-%m-%dT%H:%M:%SZ'),
+	SUM(record_count)
+FROM tls_observations
+WHERE run_id = ? AND first_ts IS NOT NULL
+GROUP BY 1 ORDER BY 1 ASC;`, runID)
+	if err == nil {
+		defer timelineRows.Close()
+		for timelineRows.Next() {
+			var tb TimelineBucket
+			if err := timelineRows.Scan(&tb.TS, &tb.Events); err == nil {
+				summary.Timeline = append(summary.Timeline, tb)
+			}
+		}
+	}
+
+	return summary, nil
+}
+
+// ListTLSObservations queries TLS observations with filtering and optional grouping per docs/07.
+func (s *Store) ListTLSObservations(ctx context.Context, runID, group, q, version, cipher, direction, attribution string, limit, offset int) (any, int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	whereClause := " WHERE o.run_id = ?"
+	args := []any{runID}
+
+	if version != "" {
+		whereClause += " AND o.tls_version = ?"
+		args = append(args, version)
+	}
+	if cipher != "" {
+		whereClause += " AND o.cipher_suite = ?"
+		args = append(args, cipher)
+	}
+	if direction != "" {
+		whereClause += " AND o.direction = ?"
+		args = append(args, direction)
+	}
+	if attribution != "" {
+		whereClause += " AND o.attribution = ?"
+		args = append(args, attribution)
+	}
+	if q != "" {
+		whereClause += " AND (o.remote_ip ILIKE ? OR o.sni ILIKE ? OR o.exe ILIKE ? OR o.comm ILIKE ? OR o.peer_cert_fp ILIKE ?)"
+		pattern := "%" + q + "%"
+		args = append(args, pattern, pattern, pattern, pattern, pattern)
+	}
+
+	if group == "endpoint" {
+		// Group by endpoint: remote_ip, remote_port, sni
+		countQuery := "SELECT COUNT(DISTINCT (o.remote_ip || ':' || CAST(o.remote_port AS TEXT) || ':' || COALESCE(o.sni, ''))) FROM tls_observations o" + whereClause
+		var total int64
+		if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("failed to count endpoint groups: %w", err)
+		}
+
+		query := `
+SELECT
+	o.remote_ip, o.remote_port, o.sni,
+	COUNT(*) AS connections,
+	SUM(o.record_count) AS events,
+	list(DISTINCT o.tls_version) FILTER (WHERE o.tls_version IS NOT NULL),
+	list(DISTINCT o.cipher_suite) FILTER (WHERE o.cipher_suite IS NOT NULL),
+	list(DISTINCT COALESCE(o.comm, o.exe)) FILTER (WHERE o.comm IS NOT NULL OR o.exe IS NOT NULL),
+	list(DISTINCT o.direction) FILTER (WHERE o.direction IS NOT NULL)
+FROM tls_observations o` + whereClause + `
+GROUP BY o.remote_ip, o.remote_port, o.sni
+ORDER BY events DESC LIMIT ? OFFSET ?;`
+
+		queryArgs := append(append([]any{}, args...), limit, offset)
+		rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to query grouped endpoints: %w", err)
+		}
+		defer rows.Close()
+
+		var items []TLSEndpointGroupItem
+		for rows.Next() {
+			var it TLSEndpointGroupItem
+			var versionsVal, ciphersVal, procsVal, dirsVal any
+			if err := rows.Scan(
+				&it.RemoteIP, &it.RemotePort, &it.SNI,
+				&it.Connections, &it.Events,
+				&versionsVal, &ciphersVal, &procsVal, &dirsVal,
+			); err != nil {
+				return nil, 0, fmt.Errorf("failed to scan endpoint group: %w", err)
+			}
+			it.Versions = toStringSlice(versionsVal)
+			it.Ciphers = toStringSlice(ciphersVal)
+			it.Processes = toStringSlice(procsVal)
+			it.Directions = toStringSlice(dirsVal)
+			items = append(items, it)
+		}
+		return items, total, rows.Err()
+	}
+
+	// group=none (flat observations)
+	countQuery := "SELECT COUNT(*) FROM tls_observations o LEFT JOIN certificates c ON o.peer_cert_fp = c.fingerprint_sha256" + whereClause
+	var total int64
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count tls observations: %w", err)
+	}
+
+	query := `
+SELECT
+	o.obs_id, o.run_id, o.conn_key, o.first_ts, o.last_ts, o.direction, o.transport,
+	o.local_ip, o.local_port, o.remote_ip, o.remote_port, o.sni, o.tls_version,
+	o.cipher_suite, o.kex_group, o.pqc_class, o.outcome, o.peer_cert_fp, o.peer_cert_source,
+	o.pid, o.exe, o.comm, o.unit, o.attribution, o.record_count, o.handshake_count,
+	o.appdata_count, o.alert_count, o.handshake_seq,
+	c.subject_cn, c.issuer_cn, c.not_after, c.pubkey_algo, c.pubkey_bits,
+	CASE
+		WHEN o.peer_cert_fp IS NULL THEN NULL
+		WHEN c.not_after < CURRENT_TIMESTAMP THEN 'expired'
+		WHEN c.not_after <= CURRENT_TIMESTAMP + INTERVAL '30 days' THEN 'expiring'
+		ELSE 'valid'
+	END AS peer_validity
+FROM tls_observations o
+LEFT JOIN certificates c ON o.peer_cert_fp = c.fingerprint_sha256` + whereClause + `
+ORDER BY o.first_ts DESC NULLS LAST LIMIT ? OFFSET ?;`
+
+	queryArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query tls observations: %w", err)
+	}
+	defer rows.Close()
+
+	var items []TLSObservationItem
+	for rows.Next() {
+		var it TLSObservationItem
+		if err := rows.Scan(
+			&it.ObsID, &it.RunID, &it.ConnKey, &it.FirstTS, &it.LastTS, &it.Direction, &it.Transport,
+			&it.LocalIP, &it.LocalPort, &it.RemoteIP, &it.RemotePort, &it.SNI, &it.TLSVersion,
+			&it.CipherSuite, &it.KexGroup, &it.PQCClass, &it.Outcome, &it.PeerCertFP, &it.PeerCertSource,
+			&it.PID, &it.Exe, &it.Comm, &it.Unit, &it.Attribution, &it.RecordCount, &it.HandshakeCount,
+			&it.AppdataCount, &it.AlertCount, &it.HandshakeSeq,
+			&it.PeerSubjectCN, &it.PeerIssuerCN, &it.PeerNotAfter, &it.PeerPubkeyAlgo, &it.PeerPubkeyBits,
+			&it.PeerValidity,
+		); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan tls observation: %w", err)
+		}
+		items = append(items, it)
+	}
+
+	return items, total, rows.Err()
+}
+
+// GetTLSEvidence computes the mathematical breakdown behind report totals per docs/07.
+func (s *Store) GetTLSEvidence(ctx context.Context, runID string) (*TLSEvidence, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ev := &TLSEvidence{}
+	ev.Events.Formula = "SUM(record_count)"
+	ev.Events.ByConnection = []TLSConnRecordCount{}
+	ev.UniqueEndpoints.Formula = "COUNT(DISTINCT remote_ip, remote_port)"
+	ev.UniqueEndpoints.Items = []string{}
+	ev.CertsObserved.Items = []TLSCertObsItem{}
+
+	// 1. Events total and breakdown
+	row := s.db.QueryRowContext(ctx, `
+SELECT
+	COALESCE(SUM(record_count), 0),
+	COALESCE(SUM(handshake_count), 0),
+	COALESCE(SUM(appdata_count), 0),
+	COALESCE(SUM(alert_count), 0)
+FROM tls_observations WHERE run_id = ?;`, runID)
+	if err := row.Scan(&ev.Events.Total, &ev.Events.Breakdown.Handshake, &ev.Events.Breakdown.Appdata, &ev.Events.Breakdown.Alert); err != nil {
+		return nil, fmt.Errorf("failed to query tls events evidence: %w", err)
+	}
+	other := ev.Events.Total - (ev.Events.Breakdown.Handshake + ev.Events.Breakdown.Appdata + ev.Events.Breakdown.Alert)
+	if other < 0 {
+		other = 0
+	}
+	ev.Events.Breakdown.Other = other
+
+	// 2. Events by connection (top 200)
+	connRows, err := s.db.QueryContext(ctx, `
+SELECT conn_key, remote_ip || ':' || CAST(remote_port AS TEXT), sni, record_count
+FROM tls_observations WHERE run_id = ? ORDER BY record_count DESC LIMIT 200;`, runID)
+	if err == nil {
+		defer connRows.Close()
+		for connRows.Next() {
+			var c TLSConnRecordCount
+			if err := connRows.Scan(&c.ConnKey, &c.Remote, &c.SNI, &c.RecordCount); err == nil {
+				ev.Events.ByConnection = append(ev.Events.ByConnection, c)
+			}
+		}
+	}
+
+	// 3. Unique endpoints
+	epRows, err := s.db.QueryContext(ctx, `
+SELECT DISTINCT remote_ip || ':' || CAST(remote_port AS TEXT)
+FROM tls_observations WHERE run_id = ? ORDER BY 1;`, runID)
+	if err == nil {
+		defer epRows.Close()
+		for epRows.Next() {
+			var ep string
+			if err := epRows.Scan(&ep); err == nil && ep != "" {
+				ev.UniqueEndpoints.Items = append(ev.UniqueEndpoints.Items, ep)
+			}
+		}
+	}
+	ev.UniqueEndpoints.Total = int64(len(ev.UniqueEndpoints.Items))
+
+	// 4. Certs observed
+	certRows, err := s.db.QueryContext(ctx, `
+SELECT DISTINCT peer_cert_fp, COALESCE(peer_cert_source, 'observed')
+FROM tls_observations WHERE run_id = ? AND peer_cert_fp IS NOT NULL ORDER BY 1;`, runID)
+	if err == nil {
+		defer certRows.Close()
+		for certRows.Next() {
+			var ci TLSCertObsItem
+			if err := certRows.Scan(&ci.FingerprintSHA256, &ci.Source); err == nil && ci.FingerprintSHA256 != "" {
+				ev.CertsObserved.Items = append(ev.CertsObserved.Items, ci)
+			}
+		}
+	}
+	ev.CertsObserved.Total = int64(len(ev.CertsObserved.Items))
+
+	return ev, nil
+}
+
+func toStringSlice(val any) []string {
+	if val == nil {
+		return []string{}
+	}
+	switch v := val.(type) {
+	case []any:
+		res := make([]string, 0, len(v))
+		for _, item := range v {
+			if item != nil {
+				res = append(res, fmt.Sprint(item))
+			}
+		}
+		return res
+	case []string:
+		return v
+	default:
+		return []string{}
+	}
+}

@@ -413,10 +413,16 @@ ON CONFLICT (run_id, path, chain_position) DO NOTHING;`)
 				return ErrTooManyRecords
 			}
 
-			// Validate ports and fingerprints
+			// Validate ports, fingerprints, and enums
 			for _, rec := range records {
 				if rec.LocalPort < 0 || rec.LocalPort > 65535 || rec.RemotePort < 0 || rec.RemotePort > 65535 {
 					return ErrInvalidPort
+				}
+				if rec.Direction != nil && *rec.Direction != "inbound" && *rec.Direction != "outbound" {
+					return fmt.Errorf("%w: invalid direction %s", ErrInvalidRequest, *rec.Direction)
+				}
+				if rec.Outcome != nil && *rec.Outcome != "established" && *rec.Outcome != "failed" && *rec.Outcome != "alert" && *rec.Outcome != "incomplete" {
+					return fmt.Errorf("%w: invalid outcome %s", ErrInvalidRequest, *rec.Outcome)
 				}
 				if rec.PeerCertificate != nil {
 					fp := rec.PeerCertificate.FingerprintSHA256
@@ -494,7 +500,6 @@ ON CONFLICT (run_id, path, chain_position) DO NOTHING;`)
 					procNodeID = "proc:" + sha1Hex(rec.Process.Exe)[:12]
 					procLabel := filepath.Base(rec.Process.Exe)
 					propsJSON, _ := json.Marshal(map[string]any{
-						"pid":  rec.Process.PID,
 						"exe":  rec.Process.Exe,
 						"comm": rec.Process.Comm,
 						"unit": rec.Process.Unit,
@@ -534,10 +539,20 @@ ON CONFLICT (run_id, path, chain_position) DO NOTHING;`)
 					remoteIP = *rec.RemoteIP
 				}
 				remoteEP := fmt.Sprintf("ep:%s:%d", remoteIP, rec.RemotePort)
+				remoteLabel := fmt.Sprintf("%s:%d", remoteIP, rec.RemotePort)
+				if rec.SNI != nil && *rec.SNI != "" {
+					remoteLabel = *rec.SNI
+				}
+				remoteProps, _ := json.Marshal(map[string]any{
+					"ip":   remoteIP,
+					"port": rec.RemotePort,
+					"sni":  rec.SNI,
+				})
 				nodeMap[remoteEP] = &nodeDelta{
 					id:        remoteEP,
 					nodeType:  "endpoint",
-					label:     fmt.Sprintf("%s:%d", remoteIP, rec.RemotePort),
+					label:     remoteLabel,
+					props:     remoteProps,
 					firstSeen: firstTS,
 					lastSeen:  lastTS,
 				}
@@ -547,10 +562,16 @@ ON CONFLICT (run_id, path, chain_position) DO NOTHING;`)
 					localIP = *rec.LocalIP
 				}
 				localEP := fmt.Sprintf("ep:%s:%d", localIP, rec.LocalPort)
+				localProps, _ := json.Marshal(map[string]any{
+					"ip":   localIP,
+					"port": rec.LocalPort,
+					"sni":  nil,
+				})
 				nodeMap[localEP] = &nodeDelta{
 					id:        localEP,
 					nodeType:  "endpoint",
 					label:     fmt.Sprintf("%s:%d", localIP, rec.LocalPort),
+					props:     localProps,
 					firstSeen: firstTS,
 					lastSeen:  lastTS,
 				}
