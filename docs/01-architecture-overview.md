@@ -22,6 +22,41 @@ Everything runs locally. No sign-in, accounts, roles, cloud, auto-update, or mul
   labelled in the UI.
 - AI-assisted development is disclosed in the README; every component must be explainable.
 
+## System Architecture Diagram
+
+```mermaid
+flowchart LR
+    subgraph Host["Target Host (Ubuntu 24.04)"]
+        subgraph KernelNetwork["Network & Kernel Layer"]
+            AF["AF_PACKET Raw Socket\n(ETH_P_ALL)"]
+            ProcNet["/proc/net/tcp{,6}\n& /proc/*/fd"]
+        end
+
+        subgraph StorageLayer["Local Filesystem"]
+            FSCerts["Cert Stores & Keys\n(/etc/ssl, /opt, corpus)"]
+            DuckDB[("Embedded DuckDB\ndata/sds.duckdb")]
+        end
+
+        subgraph SDS["sec-discovery-suite Architecture"]
+            Agent["sds-agent (Go)\n- UPX Packed (&le; 2.45 MB)\n- Passive TLS Sniffer\n- FS Walker & Parser\n- Process Attribution\n- Active TLS 1.3 Probe"]
+            Server["sds-server (Go + Embedded UI)\n- HTTP REST API (:8080)\n- Embedded DuckDB Store\n- Graph & Facet Engine\n- Task Dispatcher & Cron"]
+            UI["Embedded Web UI\n(Vite + React 19 + Dagre)\n- Runs & Schedules\n- FS Inventory & Donut\n- TLS Evidence Audit\n- Interactive React Flow"]
+        end
+    end
+
+    %% Interactions
+    AF -->|L2/L3/L4 Frames| Agent
+    ProcNet -->|Inode to PID| Agent
+    FSCerts -->|Read & Sniff| Agent
+
+    Server -->|"POST /v1/scan/{fs,tls}\n(Bearer Token Auth)"| Agent
+    Agent -->|"Batched Ingest & /complete\n(Loopback Callback)"| Server
+
+    Server -->|Read / Write SQL| DuckDB
+    Server -->|Serves Single Binary| UI
+    UI -->|REST API /api/v1/*| Server
+```
+
 ## Tech stack
 | Layer | Choice | Why |
 |---|---|---|
