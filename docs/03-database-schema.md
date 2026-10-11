@@ -7,9 +7,9 @@ File: `data/sds.duckdb`. Migrations in `api/migrations/` embedded and applied at
 1. **No FOREIGN KEYs on tables that are upserted.** DuckDB implements updates as
    delete+insert, so FKs cause spurious constraint failures. Enforce integrity in the
    ingest layer.
-2. **One statement must not touch the same conflict key twice** (ON CONFLICT DO UPDATE
-   cannot update the same row twice in one command). Aggregate duplicates in Go
-   (e.g. sum edge weights per edge_id) BEFORE executing a batch's upserts.
+2. **Never put two rows with the same conflict key in one statement.** The Phase 0b spike showed
+   unaggregated duplicates lose updates (seen_count=1, expected 2). Aggregate by conflict key in
+   Go first and apply deltas via excluded.* . Add a unit test for this.
 3. Use single writer connection for ingest; wrap each batch in one transaction.
 4. IDs: runs use ULIDs; edges/nodes use deterministic keys (below).
 
@@ -117,7 +117,7 @@ CREATE TABLE schedules (
 INSERT INTO certificates (...) VALUES (...)
 ON CONFLICT (fingerprint_sha256) DO UPDATE SET
   last_seen = excluded.last_seen,
-  seen_count = certificates.seen_count + 1;
+  seen_count = certificates.seen_count + excluded.seen_count;
 ```
 Report metrics per run: found = `COUNT(*)` of cert_observations with parse_status='ok';
 unique = `COUNT(DISTINCT fingerprint_sha256)`; duplicates = found - unique.

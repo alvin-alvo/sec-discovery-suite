@@ -52,12 +52,8 @@ Run:
  "error_summary":"raw socket denied; fell back to procfs+probe",
  "capture_method":"procfs+probe","capture_note":"operation not permitted","is_sample":false}
 ```
-Ingest batch (idempotent on `seq`):
-```json
-{"seq":3,"final":false,"kind":"cert_observations","records":[{...}]}
-{"seq":4,"final":false,"kind":"tls_observations","records":[{...}]}
-```
-Complete: `{"status_hint":"completed|partial|failed","errors":[{"code":"","message":"","path":""}],"log":[...]}`
+Ingest batch and Complete shapes: see docs/06-wire-format.md (supercedes batch shapes here).
+
 Graph:
 ```json
 {"nodes":[{"id":"proc:ab12","type":"process","label":"nginx","props":{}}],

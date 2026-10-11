@@ -93,3 +93,8 @@ plus `CAP_BPF` + `CAP_PERFMON` for the optional eBPF tier. Via `setcap` or `sudo
 3. Never log/store/transmit private-key bytes or TLS application data.
 4. Generic naming only; no company/brand names in code or docs.
 5. Every run records: timestamps, duration, record counts, errors, capture method.
+
+## Phase 0 results
+- **Agent size baseline**: Raw stripped sizeprobe 7,544,992 B, UPX 2,370,068 B => UPX packing is MANDATORY for the delivered agent.
+- **Database driver & backend**: DuckDB driver is `github.com/duckdb/duckdb-go/v2`, backend binary ~70 MB, CGO required.
+
