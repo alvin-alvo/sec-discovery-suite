@@ -1,6 +1,12 @@
-.PHONY: all agent server run-server probe size seed clean test
+.PHONY: all agent server run-server probe size seed clean test ui ui-dev
 
 all: agent server
+
+ui:
+	cd ui && npm run build
+
+ui-dev:
+	cd ui && npm run dev
 
 agent:
 	@mkdir -p bin
@@ -8,7 +14,7 @@ agent:
 	upx --best --lzma -f bin/sds-agent
 	./scripts/check-size.sh bin/sds-agent 4500000
 
-server:
+server: ui
 	@mkdir -p bin
 	cd api && CGO_ENABLED=1 go build -trimpath -buildvcs=false -ldflags="-s -w" -o ../bin/sds-server ./cmd/sds-server
 
